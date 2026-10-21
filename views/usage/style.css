@@ -1,0 +1,495 @@
+/* ==========================================================================
+   用量统计 · 视觉设计系统 (Design System)
+   --------------------------------------------------------------------------
+   设计规范：
+   - 主色取 AstrBot Dashboard 的蓝 (#4a8cff 系)，和宿主同源，不另立一套色
+   - 中性色偏冷，避免暖灰和宿主的冷调打架
+   - 明暗双模式：宿主设了 data-theme 就听宿主的；没设由 app.js 按系统偏好补上
+   - 图表、占比条、主按钮共用同一主色；语义色只留给失败和告警
+   - 不引外部字体、图标库或 CDN；图标一律内联 SVG（currentColor + stroke-width 2）
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  color-scheme: light;
+
+  --bg-canvas: #f4f7fb;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f8fafd;
+  --bg-muted: #eef1f7;
+
+  --border-subtle: #e9ebf0;
+  --border-strong: #d8dce4;
+
+  --text-main: #14171f;
+  --text-muted: #667085;
+  --text-dim: #98a2b3;
+
+  --primary: #8483ff;
+  --primary-hover: #6f6ef5;
+  --primary-active: #5f5ee6;
+  --primary-soft: rgba(132, 131, 255, 0.12);
+  --primary-ring: rgba(132, 131, 255, 0.30);
+
+  /* 下面四个是旧变量名的别名。tabs 的激活/悬停一直在读它们，
+     但它们从来没被定义过——激活态没颜色、悬停没底色，都是静默失效。 */
+  --accent: var(--primary);
+  --accent-subtle: var(--primary-soft);
+  --text: var(--text-main);
+  --surface-subtle: var(--bg-subtle);
+
+  --danger: #d94b4b;
+  --danger-soft: rgba(217, 75, 75, 0.1);
+  --ok: #22a06b;
+
+  /* 分类色板：堆叠图用。取中间调，亮暗两种背景上都读得清，所以不分两套 */
+  --series-1: #8483ff;
+  --series-2: #22c08a;
+  --series-3: #f0a13a;
+  --series-4: #a97bf0;
+  --series-5: #ef6f8f;
+  --series-6: #4bbcd4;
+  --series-rest: #94a3b8;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.06);
+
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 13px;
+  --radius-full: 9999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 22px;
+
+  --transition: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC",
+    "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-canvas: #0f1116;
+  --bg-surface: #15181f;
+  --bg-subtle: #1a1e27;
+  --bg-muted: #222733;
+
+  --border-subtle: #262b36;
+  --border-strong: #333a48;
+
+  --text-main: #e8eaf0;
+  --text-muted: #9aa3b2;
+  --text-dim: #6f7888;
+
+  --primary: #9c9bff;
+  --primary-hover: #b0afff;
+  --primary-active: #8483ff;
+  --primary-soft: rgba(156, 155, 255, 0.16);
+  --primary-ring: rgba(156, 155, 255, 0.34);
+
+  --danger: #ef7070;
+  --danger-soft: rgba(239, 112, 112, 0.14);
+  --ok: #35c98d;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 18px -4px rgba(0, 0, 0, 0.45);
+}
+
+body {
+  margin: 0;
+  padding: var(--space-5) var(--space-5) 48px;
+  background: var(--bg-canvas);
+  color: var(--text-main);
+  font: 14px/1.6 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2 { margin: 0; font-weight: 600; }
+h1 { font-size: 19px; }
+h2 { font-size: 14px; }
+
+.app-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+.brand-subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+  flex: none;
+}
+.status.is-error .status-dot { background: var(--danger); }
+.status.is-error { color: var(--danger); border-color: var(--danger-soft); }
+.status.is-loading .status-dot { background: var(--text-dim); }
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.seg button {
+  font: inherit;
+  padding: 6px 13px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.seg button + button { border-left: 1px solid var(--border-subtle); }
+.seg button:hover { background: var(--bg-subtle); color: var(--text-main); }
+.seg button.on {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.btn {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-main);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.btn:hover { background: var(--bg-subtle); border-color: var(--border-strong); }
+.btn:focus-visible { outline: 2px solid var(--primary-ring); outline-offset: 1px; }
+.btn .icon { width: 15px; height: 15px; }
+.btn.danger:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+/* 两步确认的中间态：第一次点击后按钮自己喊一声「再点一次」 */
+.btn.danger.armed { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+
+/* ---------- KPI 卡片 ---------- */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+.kpi-label { color: var(--text-muted); font-size: 12px; }
+.kpi-value {
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-sub { color: var(--text-dim); font-size: 12px; }
+.kpi.is-warn .kpi-value { color: var(--danger); }
+.delta { color: var(--text-muted); }
+
+.panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-4);
+}
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+.panel-title { display: flex; align-items: center; gap: var(--space-2); }
+.panel-note { color: var(--text-dim); font-size: 12px; }
+
+.chart { position: relative; }
+.bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  height: 136px;
+  border-bottom: 1px solid var(--border-subtle);
+  /* 四等分的横向参考线。纯 CSS —— 为这个引 JS 不值得 */
+  background-image: repeating-linear-gradient(
+    to top,
+    var(--border-subtle) 0 1px,
+    transparent 1px 25%
+  );
+}
+.col {
+  flex: 1 1 0;
+  max-width: 54px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: flex-end;
+  cursor: pointer;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.fill {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--primary-soft);
+  border: 1px solid transparent;
+  transition: background var(--transition);
+}
+.col:hover .fill, .col:focus-visible .fill { background: var(--primary); }
+.stack {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.seg-piece { display: block; width: 100%; }
+.col:hover .seg-piece, .col:focus-visible .seg-piece { filter: brightness(1.08); }
+.col:focus-visible { outline: 2px solid var(--primary-ring); outline-offset: 2px; }
+
+/* 图例只在堆叠模式出现 */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin-top: var(--space-3);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+.legend-value { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+.axis { display: flex; justify-content: center; gap: 3px; margin-top: var(--space-2); }
+.axis span {
+  flex: 1 1 0;
+  max-width: 54px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.chart-tip {
+  position: fixed;
+  z-index: 9;
+  transform: translate(-50%, -100%);
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--text-main);
+  color: var(--bg-surface);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.chart-tip.on { opacity: 1; }
+.chart-tip { white-space: pre-line; text-align: left; }
+
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td {
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.table th { color: var(--text-muted); font-weight: 500; font-size: 12px; }
+.table th.num, .table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table tr:last-child td { border-bottom: 0; }
+
+/* 页内标签栏：一个插件只出一个侧边栏入口（AstrBot 的行为），
+  所以「调用日志」只能是同一页里的另一个标签，不能另开一页。 */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tabs button {
+  font: inherit;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.tabs button:hover { color: var(--text); background: var(--surface-subtle); }
+.tabs button.on { color: var(--accent); background: var(--accent-subtle); font-weight: 600; }
+
+/* 调用日志：等比宽字体。一行 15 个键值对，换行读就散了，所以不折行、横向滚。 */
+.log {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--text-muted);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  white-space: pre;
+}
+.log:empty { display: none; }
+
+/* 可排序的表头：默认看不出是按钮，悬停才提示，激活的列带方向箭头 */
+.sort {
+  font: inherit;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--transition);
+}
+.sort:hover { color: var(--primary); }
+.sort::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  opacity: 0;
+}
+.sort[data-dir="desc"]::after { border-top: 5px solid currentColor; opacity: 0.85; }
+.sort[data-dir="asc"]::after { border-bottom: 5px solid currentColor; opacity: 0.85; }
+.sort:focus-visible { outline: 2px solid var(--primary-ring); outline-offset: 2px; }
+
+.row-plugin td { background: var(--bg-subtle); font-weight: 600; }
+.row-plugin.is-focused td { background: var(--primary-soft); }
+.row-model td:first-child { padding-left: 34px; color: var(--text-muted); font-weight: 400; }
+.row-model .model-name { font-family: var(--font-mono); font-size: 12.5px; }
+
+.toggle {
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.caret {
+  width: 9px;
+  color: var(--text-dim);
+  transition: transform var(--transition);
+}
+.toggle[aria-expanded="true"] .caret { transform: rotate(90deg); }
+
+.focus-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: var(--space-3);
+  padding: 1px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.focus-btn:hover { color: var(--primary); border-color: var(--primary); }
+.focus-btn.on { color: var(--primary); border-color: var(--primary); }
+.panel-title .focus-btn { margin-left: var(--space-2); }
+
+.meter {
+  display: inline-block;
+  vertical-align: middle;
+  width: 52px;
+  height: 6px;
+  margin-right: var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+.meter-fill { display: block; height: 100%; background: var(--primary); }
+
+/* ---------- 首屏骨架 ----------
+   参考的两个插件都没做骨架屏（它们靠状态点脉冲加内容淡入），但我们的首屏是
+   两大块空白面板，看起来像坏了，所以补一个。只在还没有数据时出现 ——
+   自动刷新时保留旧数据，否则每 30 秒闪一次。 */
+.skeleton {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--bg-muted) 25%, var(--bg-subtle) 50%, var(--bg-muted) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+.skeleton-text { display: inline-block; height: 10px; width: 58%; }
+tr.skeleton-row td:first-child .skeleton-text { width: 44%; }
+.bars .col.is-ghost { cursor: default; }
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+/* 动画是最容易被忽视的无障碍问题：前庭敏感的人会被持续动效影响 */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+.empty { padding: 30px 0; color: var(--text-dim); text-align: center; }

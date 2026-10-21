@@ -1,0 +1,51 @@
+{
+  "enabled": {
+    "description": "启用插件",
+    "hint": "这个插件会包装 provider 的方法——本项目里唯一越界的地方。默认关闭，确认接受再开。关着的时候不装任何补丁。",
+    "obvious_hint": true,
+    "type": "bool",
+    "default": false
+  },
+  "memory_cap": {
+    "description": "内存里保留多少条记录",
+    "hint": "默认 20000。超了会先把这段时间的落盘、再丢掉最旧的。设 0 表示不限制。",
+    "type": "int",
+    "default": 20000
+  },
+  "keep_days": {
+    "description": "落盘保留多少天",
+    "hint": "默认 60。更旧的天在保存时丢掉。",
+    "type": "int",
+    "default": 60
+  },
+  "save_every": {
+    "description": "每多少条记录保存一次",
+    "hint": "默认 50。不只看它：收到 /usage、插件卸载、内存超限时也都会保存。所以设 0 不等于只在卸载时保存。",
+    "type": "int",
+    "default": 50
+  },
+  "refresh_interval": {
+    "description": "隔多少秒重扫一次 provider",
+    "hint": "默认 60。插件初始化时 provider 子类可能还没被导入，那样一处补丁都挂不上。重扫是时间驱动的，因为挂不上时就收不到调用、也就没有事件能触发它。设 0 关闭。",
+    "type": "int",
+    "default": 60
+  },
+  "call_log": {
+    "description": "把每笔调用写成独立的日志文件",
+    "hint": "默认关。开了会写到数据目录的 calls.log，一行一笔，带请求构成（system/历史/prompt/工具各多肥）和耗时。只记长度和用量，不记正文。",
+    "type": "bool",
+    "default": false
+  },
+  "call_log_lines": {
+    "description": "调用日志保留多少行",
+    "hint": "默认 20000。攒到两倍才裁，免得每次追加都重写整个文件。设 0 表示不裁。",
+    "type": "int",
+    "default": 20000
+  },
+  "debug": {
+    "description": "调试日志",
+    "hint": "每笔调用往主日志输出一行：插件、模型、调用方式、会话、图片数，以及这次请求的构成和耗时。会混在 AstrBot 的日志里；要能 grep 就开上面的独立日志。",
+    "type": "bool",
+    "default": false
+  }
+}

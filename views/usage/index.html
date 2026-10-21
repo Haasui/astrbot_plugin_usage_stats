@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>用量统计</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>用量统计</h1>
+        <p class="brand-subtitle" id="summary">加载中…</p>
+      </div>
+      <div class="header-actions">
+        <span class="status is-loading" id="status">
+          <span class="status-dot"></span><span id="status-text">连接中</span>
+        </span>
+        <div class="seg" id="range" role="group" aria-label="时间范围">
+          <button type="button" data-days="1">今天</button>
+          <button type="button" data-days="7">近 7 天</button>
+          <button type="button" data-days="30" class="on">近 30 天</button>
+          <button type="button" data-days="0">全部</button>
+        </div>
+        <button type="button" class="btn" id="refresh">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20 9a8 8 0 00-14.9-3M4 15a8 8 0 0014.9 3" />
+          </svg>
+          刷新
+        </button>
+        <button type="button" class="btn danger" id="reset-stats" title="清空全部记录：落盘的「插件 × 天 × 模型」历史也会写成空">
+          重置
+        </button>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="stats" class="on">用量统计</button>
+      <button type="button" role="tab" data-tab="log">调用日志</button>
+    </nav>
+
+    <div id="tab-stats">
+    <section class="kpis">
+      <div class="kpi">
+        <span class="kpi-label">范围合计</span>
+        <span class="kpi-value" id="kpi-total">—</span>
+        <span class="kpi-sub" id="kpi-total-sub"></span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">调用次数</span>
+        <span class="kpi-value" id="kpi-calls">—</span>
+        <span class="kpi-sub" id="kpi-calls-sub"></span>
+      </div>
+      <div class="kpi" id="kpi-failed-card">
+        <span class="kpi-label">失败</span>
+        <span class="kpi-value" id="kpi-failed">—</span>
+        <span class="kpi-sub" id="kpi-failed-sub"></span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">输入（未缓存）</span>
+        <span class="kpi-value" id="kpi-in">—</span>
+        <span class="kpi-sub" id="kpi-in-sub"></span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">输入（缓存）</span>
+        <span class="kpi-value" id="kpi-cached">—</span>
+        <span class="kpi-sub" id="kpi-cached-sub"></span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">输出</span>
+        <span class="kpi-value" id="kpi-out">—</span>
+        <span class="kpi-sub" id="kpi-out-sub"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">每日用量 <span class="panel-note" id="chart-focus"></span><button type="button" class="focus-btn" id="chart-clear" hidden>取消下钻</button></h2>
+        <span class="panel-note" id="chart-peak"></span>
+      </div>
+      <div class="chart" id="chart"></div>
+      <div class="legend" id="legend" hidden></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">排行</h2>
+        <div class="header-actions">
+          <span class="panel-note" id="group-hint"></span>
+          <div class="seg" id="group" role="group" aria-label="分组方式">
+            <button type="button" data-group="plugin" class="on">按插件</button>
+            <button type="button" data-group="model">按模型</button>
+          </div>
+          <span class="panel-note" id="table-note"></span>
+        </div>
+      </div>
+      <table class="table" id="table" hidden>
+        <thead id="thead">
+          <tr>
+            <th>插件 / 模型</th>
+            <th class="num" id="th-total"><button type="button" class="sort" id="sort-total" data-sort="total">token</button></th>
+            <th class="num">占比</th>
+            <th class="num" id="th-cache"><button type="button" class="sort" id="sort-cache" data-sort="cache">缓存命中</button></th>
+            <th class="num">输入</th>
+            <th class="num">缓存</th>
+            <th class="num">输出</th>
+            <th class="num" id="th-calls"><button type="button" class="sort" id="sort-calls" data-sort="calls">调用</button></th>
+            <th class="num" id="th-failed"><button type="button" class="sort" id="sort-failed" data-sort="failed">失败</button></th>
+            <th class="num" id="th-images"><button type="button" class="sort" id="sort-images" data-sort="images">图</button></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty" id="empty" hidden>这个范围内没有记录。</div>
+    </section>
+
+    </div>
+
+    <div id="tab-log" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <h2 class="panel-title">调用日志</h2>
+        <div class="header-actions">
+          <span class="panel-note" id="log-note"></span>
+          <div class="seg" id="log-size" role="group" aria-label="读取条数">
+            <button type="button" data-tail="200" class="on">200 条</button>
+            <button type="button" data-tail="1000">1000 条</button>
+            <button type="button" data-tail="100000">全部</button>
+          </div>
+          <button type="button" class="btn" id="log-refresh">刷新</button>
+          <button type="button" class="btn" id="log-export">导出</button>
+        </div>
+      </div>
+      <pre class="log" id="log-body"></pre>
+    </section>
+    </div>
+
+    <div class="chart-tip" id="tip" role="status" aria-live="polite"></div>
+
+    <script src="/api/plugin/page/bridge-sdk.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

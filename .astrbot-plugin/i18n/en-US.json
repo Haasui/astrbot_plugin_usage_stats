@@ -1,0 +1,41 @@
+{
+  "metadata": {
+    "display_name": "Usage Stats",
+    "short_desc": "Per-plugin attribution of model token usage — see who the money goes to.",
+    "desc": "AstrBot's built-in usage statistics only cover the main conversation. Once a dozen plugins are installed, several of them call models on their own, and those calls show up on the bill with no way to tell who made them.\n\nThis plugin patches the provider layer, records every model call, and attributes it to the plugin that made it. Use /usage for the ranking, or the WebUI page for charts.\n\n[Why it has to reach outside] The official hook on_llm_request only covers the main conversation. Calls made by plugins go through context.llm_generate, which calls provider.text_chat directly and never passes through the filter pipeline. Without wrapping the provider there is no way to see that half of the traffic.\n\n[The disciplines] Read-only, off by default, strictly restored on unload. Bookkeeping failures are always swallowed and never affect a conversation.\n\n[How attribution works] Walk up the call stack to the first data.plugins.* module name. Nothing found means the main conversation.\n\n[What is stored] Counts per plugin x day x model, kept 60 days by default. Counts only — no message bodies."
+  },
+  "config": {
+    "enabled": {
+      "description": "Enable plugin",
+      "hint": "This plugin wraps provider methods — the only place in this project that reaches outside the official extension points. Off by default; no patches are installed while it is off."
+    },
+    "memory_cap": {
+      "description": "Records kept in memory",
+      "hint": "Default 20000. When exceeded, this batch is saved first, then the oldest records are dropped. Set 0 for no limit."
+    },
+    "keep_days": {
+      "description": "Days of history to keep on disk",
+      "hint": "Default 60. Older days are dropped when saving. Set 0 to keep everything."
+    },
+    "save_every": {
+      "description": "Save after this many records",
+      "hint": "Default 50. That is not the only trigger: /usage, plugin unload, and hitting the memory cap all save as well. So 0 does not mean \"save only on unload\"."
+    },
+    "refresh_interval": {
+      "description": "Seconds between provider rescans",
+      "hint": "Default 60. Provider subclasses may not be imported yet when the plugin initialises, in which case no patch can be installed. The rescan is time-driven because with no patches installed there are no calls, and therefore no event to trigger it. Set 0 to disable."
+    },
+    "call_log": {
+      "description": "Write a separate per-call log file",
+      "hint": "Off by default. When on, writes calls.log in the plugin data directory: one line per call, including the request's composition (how big system/history/prompt/tools each are) and the elapsed time. Lengths and counts only — never message bodies."
+    },
+    "call_log_lines": {
+      "description": "Lines kept in the call log",
+      "hint": "Default 20000. The file is trimmed only once it reaches twice that, so appending does not rewrite the whole file every time. Set 0 to keep everything."
+    },
+    "debug": {
+      "description": "Debug logging",
+      "hint": "Logs one line per call to the main log: plugin, model, method, session, image count, plus this request's composition and elapsed time. It is mixed into AstrBot's log; use the separate call log above if you want to grep."
+    }
+  }
+}
