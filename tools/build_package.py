@@ -11,6 +11,7 @@ FILES = [
     "_conf_schema.json", "metadata.yaml", "requirements.txt", "requirements-dev.txt", "pytest.ini", "ruff.toml",
     "LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "CHANGELOG.md", ".astrbot-plugin/i18n/en-US.json",
     "views/usage/index.html", "views/usage/style.css", "views/usage/dashboard.js", "views/usage/app.js",
+    "docs/README.md", "docs/USAGE.md", "docs/CONFIGURATION.md", "docs/DEVELOPMENT.md",
     "docs/ARCHITECTURE.md", "docs/VERIFY.md", "docs/VERIFY-0.3.0.md", "docs/VERIFY-0.3.1.md", "docs/VERIFY-0.3.2.md", "docs/FEATURE-UX-DESIGN.md", "docs/EASYCLI-USAGE-MIGRATION.md",
     "tools/preview.mjs", "tools/preview_server.py", "tools/build_package.py",
     "tests/test_core.py", "tests/test_store.py", "tests/test_patch.py", "tests/test_invariants.py", "tests/test_config.py", "tests/test_contract.py",
