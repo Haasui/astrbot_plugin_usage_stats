@@ -34,7 +34,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping
 
-from .stats import Bucket, Usage, day_key, tidy_model_key
+from .stats import Bucket, Usage, day_key, optional_sum, tidy_model_key
 
 FORMAT_VERSION = 1
 """落盘格式版本。
@@ -49,10 +49,12 @@ KEEP_DAYS = 60
 COUNT_KEYS = (
     "calls",
     "failed",
+    "canceled",
     "images",
     "input_other",
     "input_cached",
     "cache_reported",
+    "usage_reported",
     "output",
 )
 """参与累加的字段。`total` 是派生的，不在这里。"""
@@ -92,10 +94,11 @@ def merge(base: dict, extra: dict) -> dict:
                     current[key] = int(current.get(key, 0) or 0) + int(
                         bucket.get(key, 0) or 0
                     )
+                for key in ("reasoning", "cache_write"):
+                    current[key] = optional_sum(current.get(key), bucket.get(key))
                 current["total"] = (
                     int(current.get("input_other", 0) or 0)
                     + int(current.get("input_cached", 0) or 0)
-                    + int(current.get("cache_reported", 0) or 0)
                     + int(current.get("output", 0) or 0)
                 )
     return out
@@ -148,12 +151,16 @@ def as_buckets(buckets: dict) -> dict[str, dict[str, dict[str, Bucket]]]:
                 bucket = Bucket()
                 bucket.calls = int(cell.get("calls", 0) or 0)
                 bucket.failed = int(cell.get("failed", 0) or 0)
+                bucket.canceled = int(cell.get("canceled", 0) or 0)
                 bucket.images = int(cell.get("images", 0) or 0)
                 bucket.usage = Usage(
                     input_other=int(cell.get("input_other", 0) or 0),
                     input_cached=int(cell.get("input_cached", 0) or 0),
                     output=int(cell.get("output", 0) or 0),
                     cache_reported=int(cell.get("cache_reported", 0) or 0),
+                    reasoning=cell.get("reasoning"),
+                    cache_write=cell.get("cache_write"),
+                    usage_reported=int(cell.get("usage_reported", 0) or 0),
                 )
                 out[plugin][day][model] = bucket
     return {p: {d: dict(m) for d, m in days.items()} for p, days in out.items()}
@@ -170,6 +177,7 @@ def by_plugin_model(
                 target = out[plugin][model]
                 target.calls += bucket.calls
                 target.failed += bucket.failed
+                target.canceled += bucket.canceled
                 target.images += bucket.images
                 target.usage = target.usage + bucket.usage
     return {p: dict(m) for p, m in out.items()}
@@ -216,12 +224,14 @@ def window_view(
                     cell[model] = Bucket(
                         calls=bucket.calls,
                         failed=bucket.failed,
+                        canceled=bucket.canceled,
                         images=bucket.images,
                         usage=bucket.usage,
                     )
                 else:
                     current.calls += bucket.calls
                     current.failed += bucket.failed
+                    current.canceled += bucket.canceled
                     current.images += bucket.images
                     current.usage = current.usage + bucket.usage
                 day_cell["calls"] += bucket.calls
@@ -241,11 +251,12 @@ def window_view(
 
 def aggregate(view: Mapping[str, Mapping[str, Bucket]]) -> dict:
     """把一个 window_view 的 view 汇总成一组总量。环比要用它各算一次。"""
-    calls = failed = images = other = cached = output = 0
+    calls = failed = canceled = images = other = cached = output = 0
     for models in view.values():
         for bucket in models.values():
             calls += bucket.calls
             failed += bucket.failed
+            canceled += bucket.canceled
             images += bucket.images
             other += bucket.usage.input_other
             cached += bucket.usage.input_cached
@@ -254,6 +265,7 @@ def aggregate(view: Mapping[str, Mapping[str, Bucket]]) -> dict:
         "tokens": other + cached + output,
         "calls": calls,
         "failed": failed,
+        "canceled": canceled,
         "images": images,
         "input_other": other,
         "input_cached": cached,
@@ -310,7 +322,17 @@ def load(path: str | Path) -> dict:
     return buckets if isinstance(buckets, dict) else {}
 
 
-def save(path: str | Path, buckets: dict) -> bool:
+def load_checkpoint(path: str | Path) -> str:
+    """Read the detail inclusion proof stored beside daily totals."""
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = raw.get("event_checkpoint", "") if isinstance(raw, dict) else ""
+        return value if isinstance(value, str) and len(value) <= 128 else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def save(path: str | Path, buckets: dict, event_checkpoint: str = "") -> bool:
     """写盘。先写同目录下的唯一临时文件，再原子替换。
 
     临时文件用唯一名而不是固定的 `.tmp`：同一个数据目录上万一有两个写入方，
@@ -323,6 +345,7 @@ def save(path: str | Path, buckets: dict) -> bool:
         "version": FORMAT_VERSION,
         "saved_at": int(time.time()),
         "buckets": buckets,
+        "event_checkpoint": event_checkpoint,
     }
     tmp: str | None = None
     try:

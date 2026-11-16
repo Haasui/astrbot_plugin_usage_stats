@@ -93,15 +93,17 @@ def test_package_contains_every_runtime_file():
     """
     import zipfile
 
-    dist = ROOT.parent / "_dist"
-    zips = sorted(dist.glob("astrbot_plugin_usage_stats-*.zip")) if dist.exists() else []
+    dist = ROOT / "_dist"
+    if not dist.exists():
+        dist = ROOT.parent / "_dist"
+    zips = sorted(dist.glob("astrbot_plugin_usage_stats-*v" + _metadata_scalar("version") + "*.zip")) if dist.exists() else []
     if not zips:
-        return  # 还没打过包，跳过
+        return  # 当前版本尚未打包；旧包不代表当前源码的 runtime 清单
     latest = max(zips, key=lambda p: p.stat().st_mtime)
     with zipfile.ZipFile(latest) as archive:
         names = set(archive.namelist())
 
-    required = ["main.py", "_conf_schema.json", "metadata.yaml", "LICENSE",
+    required = ["main.py", "event_store.py", "price_catalog.py", "stats.py", "store.py", "patch.py", "attribute.py", "log_tail.py", "views/usage/dashboard.js", "_conf_schema.json", "metadata.yaml", "LICENSE", "THIRD_PARTY_NOTICES.md",
                 ".astrbot-plugin/i18n/en-US.json"]
     for name in re.findall(r"^\s*-\s*name:\s*(\S+)\s*$", METADATA, re.M):
         required.append(f"views/{name}/index.html")

@@ -10,12 +10,20 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 MAIN_AGENT = "main_agent"
 """归因不到插件时的归属：主对话，或内置 star。"""
 
 NO_SESSION = "no_session"
 """插件发起的调用拿不到会话（见 docs/usage-attribution.md 第 5 节）。"""
+
+
+def optional_sum(left: int | None, right: int | None) -> int | None:
+    """Sum reported counters; keep wholly unknown dimensions unknown."""
+    if left is None and right is None:
+        return None
+    return (left or 0) + (right or 0)
 
 
 @dataclass(frozen=True)
@@ -27,6 +35,12 @@ class Usage:
     """
 
     input_other: int = 0
+    """Canonical AstrBot normalized input; preserve this value in APIs and storage.
+
+    Detail cache_write is displayed separately, not subtracted from input_other
+    in API responses. The composition chart uses the three normalized columns.
+    Pricing may split a proven cache_write subset without changing these fields.
+    """
     input_cached: int = 0
     output: int = 0
     cache_reported: int = 0
@@ -37,12 +51,23 @@ class Usage:
     0% 会被读成「命中了 0 次」，而事实是「根本没告诉过我们」。
     """
 
+    reasoning: int | None = None
+    cache_write: int | None = None
+    """Informational raw count; never add again to normalized token totals.
+
+    Price it as a subset of input_other only when that relationship is valid.
+    """
+    usage_reported: int = 0
+
     def __add__(self, other: "Usage") -> "Usage":
         return Usage(
             self.input_other + other.input_other,
             self.input_cached + other.input_cached,
             self.output + other.output,
             self.cache_reported + other.cache_reported,
+            optional_sum(self.reasoning, other.reasoning),
+            optional_sum(self.cache_write, other.cache_write),
+            self.usage_reported + other.usage_reported,
         )
 
     @property
@@ -85,6 +110,9 @@ class Call:
     # 展示走 debug 日志，不进 /usage——那儿要保持一屏看完。以后想按会话聚合不用重写。
     session: str = NO_SESSION
     shape: Shape | None = None
+    event_id: str = field(default_factory=lambda: str(uuid4()))
+    result: str = ""
+    ttft_ms: int | None = None
 
     @property
     def model_key(self) -> str:
@@ -99,10 +127,13 @@ class Bucket:
     failed: int = 0
     images: int = 0
     usage: Usage = field(default_factory=Usage)
+    canceled: int = 0
 
     def add(self, call: Call) -> None:
         self.calls += 1
-        if not call.ok:
+        if call.result == "canceled":
+            self.canceled += 1
+        elif not call.ok:
             self.failed += 1
         self.images += call.images
         self.usage = self.usage + call.usage
@@ -111,10 +142,15 @@ class Bucket:
         return {
             "calls": self.calls,
             "failed": self.failed,
+            "canceled": self.canceled,
             "images": self.images,
             "input_other": self.usage.input_other,
             "input_cached": self.usage.input_cached,
             "output": self.usage.output,
+            "cache_reported": self.usage.cache_reported,
+            "reasoning": self.usage.reasoning,
+            "cache_write": self.usage.cache_write,
+            "usage_reported": self.usage.usage_reported,
             "total": self.usage.total,
         }
 
@@ -188,12 +224,14 @@ def add_into(
                 cell[model] = Bucket(
                     calls=bucket.calls,
                     failed=bucket.failed,
+                    canceled=bucket.canceled,
                     images=bucket.images,
                     usage=bucket.usage,
                 )
                 continue
             current.calls += bucket.calls
             current.failed += bucket.failed
+            current.canceled += bucket.canceled
             current.images += bucket.images
             current.usage = current.usage + bucket.usage
 
@@ -285,12 +323,14 @@ def fold_by_model_across(
                 merged[key] = Bucket(
                     calls=bucket.calls,
                     failed=bucket.failed,
+                    canceled=bucket.canceled,
                     images=bucket.images,
                     usage=bucket.usage,
                 )
                 continue
             current.calls += bucket.calls
             current.failed += bucket.failed
+            current.canceled += bucket.canceled
             current.images += bucket.images
             current.usage = current.usage + bucket.usage
     return sorted(
@@ -410,44 +450,77 @@ def cache_hit_rate(bucket: Bucket) -> float:
     return bucket.usage.input_cached / total_in
 
 
+def _value(obj: Any, name: str) -> Any:
+    """Read raw SDK objects and dictionary payloads without serializing content."""
+    try:
+        return obj.get(name) if isinstance(obj, Mapping) else getattr(obj, name, None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _raw_usage(response: Any) -> Any:
+    completion = _value(response, "raw_completion")
+    for name in ("usage", "usage_metadata", "usageMetadata"):
+        usage = _value(completion, name)
+        if usage is not None:
+            return usage
+    return None
+
+
+def _counter(obj: Any, *paths: tuple[str, ...]) -> int | None:
+    for path in paths:
+        value = obj
+        for name in path:
+            value = _value(value, name)
+        # Unknown/malformed counters must not become a fabricated zero.
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value >= 0:
+            return value
+    return None
+
+
 def reports_cache(response: Any) -> bool:
-    """供应商的原始响应里有没有缓存命中字段。
-
-    只看 AstrBot 归一化后的 `TokenUsage` 判断不出来：没上报和上报了 0 都是 0。
-    所以要扒 `raw_completion` 的 usage——那里才看得出字段在不在。
-
-    注意它只是**辅助**证据：流式响应的 `raw_completion` 常常取不到，这里会一路
-    False。真正可靠的是命中数本身（见 `usage_from`）。
-    """
-    raw = getattr(response, "raw_completion", None)
-    usage = getattr(raw, "usage", None)
-    if usage is None:
-        return False
-    details = getattr(usage, "prompt_tokens_details", None)
-    if details is not None and getattr(details, "cached_tokens", None) is not None:
-        return True
-    # DeepSeek / Anthropic 把命中数放在别的字段名下
-    for attr in ("prompt_cache_hit_tokens", "cache_read_input_tokens"):
-        if getattr(usage, attr, None) is not None:
-            return True
-    return False
+    """Whether a raw response explicitly reports cache hits, including zero."""
+    return _counter(
+        _raw_usage(response),
+        ("prompt_tokens_details", "cached_tokens"),
+        ("input_tokens_details", "cached_tokens"),
+        ("prompt_cache_hit_tokens",),
+        ("cache_read_input_tokens",),
+        ("cached_content_token_count",),
+        ("cachedContentTokenCount",),
+    ) is not None
 
 
 def usage_from(raw: Any, response: Any = None) -> Usage:
-    """AstrBot 的 TokenUsage -> 本插件的 Usage。
+    """Copy normalized totals; raw evidence supplies independent detail counters.
 
-    字段名是同一种切法（缓存命中单独一栏），所以这里是逐字段搬运。
-    provider 没填 usage 时 raw 是 None，记 0 但调用次数照记。
+    Reasoning is usually part of output and cache writes can be part of input.
+    Neither is added to the established three-column total.
     """
-    if raw is None:
-        return Usage()
-    cached = int(getattr(raw, "input_cached", 0) or 0)
+    usage = _raw_usage(response)
+    cached = int(_value(raw, "input_cached") or 0)
     return Usage(
-        input_other=int(getattr(raw, "input_other", 0) or 0),
+        input_other=int(_value(raw, "input_other") or 0),
         input_cached=cached,
-        output=int(getattr(raw, "output", 0) or 0),
-        # 命中数为正本身就是「这家上报了」的证据 —— 缓存数不会凭空出现。
-        # 只看 reports_cache 不够：它要扒 raw_completion，而流式响应的那一栏
-        # 常常取不到，于是每次都判成「没上报」，命中率整列变成「—」。
-        cache_reported=1 if (cached > 0 or reports_cache(response)) else 0,
+        output=int(_value(raw, "output") or 0),
+        cache_reported=int(cached > 0 or reports_cache(response)),
+        reasoning=_counter(
+            usage,
+            ("completion_tokens_details", "reasoning_tokens"),
+            ("output_tokens_details", "reasoning_tokens"),
+            ("reasoning_tokens",),
+            ("thoughts_token_count",),
+            ("thoughtsTokenCount",),
+        ),
+        cache_write=_counter(
+            usage,
+            ("cache_creation_input_tokens",),
+            ("cache_write_tokens",),
+            ("prompt_tokens_details", "cache_write_tokens"),
+            ("input_tokens_details", "cache_write_tokens"),
+        ),
+        # Raw detail metadata alone does not establish normalized input/output totals.
+        usage_reported=int(raw is not None),
     )

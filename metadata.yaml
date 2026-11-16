@@ -17,8 +17,8 @@ desc: |
 
   【归因方式】从调用栈向上找第一个 data.plugins.* 的模块名。找不到就是主对话。
 
-  【数据】计数按「插件 × 天 × 模型」落盘，默认保留 60 天。只存计数，不存消息正文。
-version: 0.2.6
+  【数据】默认保存「插件 × 天 × 模型」日汇总；可选择启用结构化调用明细，查看细粒度趋势、性能和请求记录。不保存消息正文或 API 密钥。
+version: 0.3.2
 author: Haasui
 repo: https://github.com/Haasui/astrbot_plugin_usage_stats
 # 这个下限不是估的：v4.11.0 的 provider.py 里 provider_config: dict（:30/:33）、

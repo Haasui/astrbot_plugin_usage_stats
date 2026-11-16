@@ -1,144 +1,100 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>用量统计</title>
-    <link rel="stylesheet" href="./style.css" />
-  </head>
-  <body>
-    <header class="app-header">
-      <div>
-        <h1>用量统计</h1>
-        <p class="brand-subtitle" id="summary">加载中…</p>
-      </div>
-      <div class="header-actions">
-        <span class="status is-loading" id="status">
-          <span class="status-dot"></span><span id="status-text">连接中</span>
-        </span>
-        <div class="seg" id="range" role="group" aria-label="时间范围">
-          <button type="button" data-days="1">今天</button>
-          <button type="button" data-days="7">近 7 天</button>
-          <button type="button" data-days="30" class="on">近 30 天</button>
-          <button type="button" data-days="0">全部</button>
-        </div>
-        <button type="button" class="btn" id="refresh">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6" />
-            <path stroke-linecap="round" stroke-linejoin="round" d="M20 9a8 8 0 00-14.9-3M4 15a8 8 0 0014.9 3" />
-          </svg>
-          刷新
-        </button>
-        <button type="button" class="btn danger" id="reset-stats" title="清空全部记录：落盘的「插件 × 天 × 模型」历史也会写成空">
-          重置
-        </button>
-      </div>
-    </header>
-
-    <nav class="tabs" id="tabs" role="tablist">
-      <button type="button" role="tab" data-tab="stats" class="on">用量统计</button>
-      <button type="button" role="tab" data-tab="log">调用日志</button>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>用量统计</title>
+  <link rel="stylesheet" href="./style.css?v=0.3.2" />
+</head>
+<body>
+  <h1 class="sr-only">用量统计</h1>
+  <p id="summary" class="sr-only">当前统计范围</p>
+  <header class="app-header">
+    <nav id="tabs" class="tabs" role="tablist" aria-label="用量统计视图">
+      <button type="button" id="tab-stats-btn" role="tab" data-tab="stats" aria-controls="tab-stats" aria-selected="true" tabindex="0">总览</button>
+      <button type="button" id="tab-analysis-btn" role="tab" data-tab="analysis" aria-controls="tab-analysis" aria-selected="false" tabindex="-1">分析</button>
+      <button type="button" id="tab-events-btn" role="tab" data-tab="events" aria-controls="tab-events" aria-selected="false" tabindex="-1">请求明细</button>
+      <button type="button" id="tab-prices-btn" role="tab" data-tab="prices" aria-controls="tab-prices" aria-selected="false" tabindex="-1">价格统计</button>
+      <button type="button" id="tab-log-btn" role="tab" data-tab="log" aria-controls="tab-log" aria-selected="false" tabindex="-1">调用日志</button>
+      <button type="button" id="tab-manage-btn" role="tab" data-tab="manage" aria-controls="tab-manage" aria-selected="false" tabindex="-1">数据管理</button>
     </nav>
-
-    <div id="tab-stats">
-    <section class="kpis">
-      <div class="kpi">
-        <span class="kpi-label">范围合计</span>
-        <span class="kpi-value" id="kpi-total">—</span>
-        <span class="kpi-sub" id="kpi-total-sub"></span>
-      </div>
-      <div class="kpi">
-        <span class="kpi-label">调用次数</span>
-        <span class="kpi-value" id="kpi-calls">—</span>
-        <span class="kpi-sub" id="kpi-calls-sub"></span>
-      </div>
-      <div class="kpi" id="kpi-failed-card">
-        <span class="kpi-label">失败</span>
-        <span class="kpi-value" id="kpi-failed">—</span>
-        <span class="kpi-sub" id="kpi-failed-sub"></span>
-      </div>
-      <div class="kpi">
-        <span class="kpi-label">输入（未缓存）</span>
-        <span class="kpi-value" id="kpi-in">—</span>
-        <span class="kpi-sub" id="kpi-in-sub"></span>
-      </div>
-      <div class="kpi">
-        <span class="kpi-label">输入（缓存）</span>
-        <span class="kpi-value" id="kpi-cached">—</span>
-        <span class="kpi-sub" id="kpi-cached-sub"></span>
-      </div>
-      <div class="kpi">
-        <span class="kpi-label">输出</span>
-        <span class="kpi-value" id="kpi-out">—</span>
-        <span class="kpi-sub" id="kpi-out-sub"></span>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h2 class="panel-title">每日用量 <span class="panel-note" id="chart-focus"></span><button type="button" class="focus-btn" id="chart-clear" hidden>取消下钻</button></h2>
-        <span class="panel-note" id="chart-peak"></span>
-      </div>
-      <div class="chart" id="chart"></div>
-      <div class="legend" id="legend" hidden></div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h2 class="panel-title">排行</h2>
-        <div class="header-actions">
-          <span class="panel-note" id="group-hint"></span>
-          <div class="seg" id="group" role="group" aria-label="分组方式">
-            <button type="button" data-group="plugin" class="on">按插件</button>
-            <button type="button" data-group="model">按模型</button>
-          </div>
-          <span class="panel-note" id="table-note"></span>
-        </div>
-      </div>
-      <table class="table" id="table" hidden>
-        <thead id="thead">
-          <tr>
-            <th>插件 / 模型</th>
-            <th class="num" id="th-total"><button type="button" class="sort" id="sort-total" data-sort="total">token</button></th>
-            <th class="num">占比</th>
-            <th class="num" id="th-cache"><button type="button" class="sort" id="sort-cache" data-sort="cache">缓存命中</button></th>
-            <th class="num">输入</th>
-            <th class="num">缓存</th>
-            <th class="num">输出</th>
-            <th class="num" id="th-calls"><button type="button" class="sort" id="sort-calls" data-sort="calls">调用</button></th>
-            <th class="num" id="th-failed"><button type="button" class="sort" id="sort-failed" data-sort="failed">失败</button></th>
-            <th class="num" id="th-images"><button type="button" class="sort" id="sort-images" data-sort="images">图</button></th>
-          </tr>
-        </thead>
-        <tbody id="tbody"></tbody>
-      </table>
-      <div class="empty" id="empty" hidden>这个范围内没有记录。</div>
-    </section>
-
+    <div class="header-actions"><span id="status" class="status is-loading" role="status" aria-live="polite"><span id="status-text">连接中</span></span><button type="button" id="refresh" class="refresh-button" aria-label="刷新统计" title="刷新统计">↻</button></div>
+  </header>
+  <section class="filters" aria-label="统一筛选">
+    <div class="filter-primary">
+      <label><span class="sr-only">时间范围</span><select id="range" aria-label="时间范围"><option value="1">今天</option><option value="7">近 7 天</option><option value="30" selected>近 30 天</option><option value="0">全部时间</option><option value="custom">自定义时间</option></select></label>
+      <label><span class="sr-only">模型</span><select id="filter-model" aria-label="模型"><option value="">全部模型</option></select></label>
+      <label><span class="sr-only">来源插件</span><select id="filter-plugin" aria-label="来源插件"><option value="">全部插件</option></select></label>
+      <label><span class="sr-only">Provider</span><select id="filter-provider" aria-label="Provider"><option value="">全部 Provider</option></select></label>
+      <label><span class="sr-only">结果</span><select id="filter-result" aria-label="结果"><option value="all">全部结果</option><option value="success">成功</option><option value="failed">失败</option><option value="canceled">取消</option></select></label>
+      <button type="button" id="clear-filters" class="clear-filter" aria-label="清除模型、插件、Provider 和结果筛选" title="清除筛选">×</button>
     </div>
-
-    <div id="tab-log" hidden>
-    <section class="panel">
-      <div class="panel-head">
-        <h2 class="panel-title">调用日志</h2>
-        <div class="header-actions">
-          <span class="panel-note" id="log-note"></span>
-          <div class="seg" id="log-size" role="group" aria-label="读取条数">
-            <button type="button" data-tail="200" class="on">200 条</button>
-            <button type="button" data-tail="1000">1000 条</button>
-            <button type="button" data-tail="100000">全部</button>
-          </div>
-          <button type="button" class="btn" id="log-refresh">刷新</button>
-          <button type="button" class="btn" id="log-export">导出</button>
-        </div>
+    <div id="custom-range" class="filter-row custom-range" hidden><label>开始（本地时间，含）<input id="start" type="datetime-local" /></label><label>结束（本地时间，不含）<input id="end" type="datetime-local" /></label><button type="button" id="apply-range">应用时间</button></div>
+    <p id="filter-note" class="sr-only" role="status" aria-live="polite">所有统计视图共用筛选；调用日志独立按最近条数读取。</p>
+  </section>
+  <main id="dashboard" aria-busy="true">
+    <section id="tab-stats" role="tabpanel" aria-labelledby="tab-stats-btn" tabindex="0">
+      <div class="kpis">
+        <article class="kpi"><span>请求数</span><strong id="kpi-calls">—</strong><small id="kpi-calls-sub">当前筛选范围</small></article>
+        <article class="kpi"><span>平均 TPS</span><strong id="kpi-tps">—</strong><small id="kpi-tps-sub">Token / 秒 · 有效样本</small></article>
+        <article class="kpi"><span>Token</span><strong id="kpi-total">—</strong><small id="kpi-total-sub">输入 + 缓存读取 + 输出</small></article>
+        <article class="kpi"><span>成功率</span><strong id="kpi-success">—</strong><small id="kpi-success-sub">有结果的请求</small></article>
+        <article class="kpi"><span>缓存命中率</span><strong id="kpi-cache">—</strong><small id="kpi-cache-sub">缓存读取 / 输入</small></article>
+        <article class="kpi"><span>估算费用 · USD</span><strong id="kpi-cost">—</strong><small id="kpi-cost-sub">按可计价明细估算，非账单</small></article>
       </div>
-      <pre class="log" id="log-body"></pre>
+      <div class="overview-grid">
+        <section class="panel trend-panel"><div class="panel-head"><div><h2>Token 用量趋势</h2><p id="chart-caption" class="muted">聚焦柱体查看分量；方向键切换。图例仅影响图表。</p></div><div id="group" class="seg" role="group" aria-label="分组方式"><button type="button" data-group="model" aria-pressed="false">按模型</button><button type="button" data-group="plugin" aria-pressed="true">按插件</button></div></div><p id="chart-peak" class="muted"></p><div id="chart" class="chart-scroll" aria-describedby="chart-caption">加载中…</div><div id="legend" class="legend" role="group" aria-label="图例，可切换系列"></div><p id="chart-detail" class="muted" role="status" aria-live="polite"></p></section>
+        <section class="panel"><h2>Token 分布</h2><div id="donut" class="donut"></div><dl id="token-parts" class="metrics"></dl><p class="muted">推理、缓存写入另列参考，不重复叠加进圆环。</p><div class="divider"></div><h2>性能 / 结果 / 计价覆盖</h2><dl id="performance" class="metrics"></dl></section>
+      </div>
     </section>
-    </div>
-
-    <div class="chart-tip" id="tip" role="status" aria-live="polite"></div>
-
-    <script src="/api/plugin/page/bridge-sdk.js"></script>
-    <script src="./app.js"></script>
-  </body>
+    <section id="tab-analysis" role="tabpanel" aria-labelledby="tab-analysis-btn" tabindex="0" hidden><section class="panel"><div class="panel-head"><div><h2>用量排行</h2><p class="muted">表头可排序；选择名称可应用全局筛选。</p></div><label>排行维度<select id="analysis-group"><option value="plugins">来源插件</option><option value="models">模型</option><option value="providers">Provider</option></select></label></div><div id="table-scroll" class="table-scroll" role="region" aria-label="用量排行，可横向滚动" tabindex="0"><table id="table"><thead><tr><th scope="col">名称</th><th scope="col" id="th-tokens"><button type="button" id="sort-tokens">Token</button></th><th scope="col" id="th-calls"><button type="button" id="sort-calls">请求数</button></th><th scope="col" id="th-failed"><button type="button" id="sort-failed">失败数</button></th></tr></thead><tbody id="tbody"></tbody></table></div><p id="empty" class="empty" hidden>这个范围内没有记录。</p><p id="table-note" class="muted"></p></section></section>
+    <section id="tab-events" role="tabpanel" aria-labelledby="tab-events-btn" tabindex="0" hidden><section class="panel"><div class="panel-head"><h2>请求明细</h2><button type="button" id="export-events">导出 CSV</button></div><p class="muted">导出只含当前筛选的详细历史，最多 5000 行，不含旧汇总。记录不含消息正文。</p><p id="export-status" role="status" aria-live="polite"></p><details><summary>显示列与列宽</summary><div id="event-columns" class="column-controls"></div></details><div class="table-scroll" role="region" aria-label="请求明细，可横向滚动" tabindex="0"><table id="events-table"><thead id="events-head"></thead><tbody id="events-body"></tbody></table></div><div class="pager"><button type="button" id="page-prev">上一页</button><span id="page-note" role="status" aria-live="polite"></span><button type="button" id="page-next">下一页</button><label>每页<select id="page-size"><option value="50">50</option><option value="100">100</option><option value="200">200</option></select></label></div></section></section>
+    <section id="tab-prices" role="tabpanel" aria-labelledby="tab-prices-btn" tabindex="0" hidden>
+      <section class="panel price-panel" aria-label="模型价格统计">
+        <div class="price-topline">
+          <div class="price-total"><strong id="price-total">—</strong><p id="price-summary" class="muted">加载价格统计…</p></div>
+          <div class="price-toolbar"><label class="price-search"><span class="sr-only">搜索模型价格</span><input id="price-search" type="search" placeholder="搜索模型" aria-label="搜索模型价格" /></label><button type="button" id="price-add">手动添加</button><label><span class="sr-only">价格来源</span><select id="price-source" aria-label="价格来源"><option value="models.dev">Models.dev</option></select></label><button type="button" id="price-sync" class="primary">更新价格</button></div>
+        </div>
+        <p id="price-source-state" class="muted price-source-state">尚未同步公共参考价，点击更新价格。</p>
+        <p id="price-compat" class="notice" role="status" hidden></p><p id="price-status" class="price-status" role="status" aria-live="polite"></p>
+        <div class="table-scroll price-scroll" role="region" aria-label="模型用量与价格，可横向滚动" tabindex="0"><table id="price-table"><thead><tr><th scope="col">模型</th><th scope="col" class="num">调用数</th><th scope="col" class="num">Token</th><th scope="col" class="num">估算成本</th><th scope="col" class="num">输入价 ($/1M)</th><th scope="col" class="num">输出价 ($/1M)</th><th scope="col" class="num">缓存读取价 ($/1M)</th><th scope="col" class="num">缓存写入价 ($/1M)</th><th scope="col">操作</th></tr></thead><tbody id="prices-body"></tbody></table></div>
+        <div id="price-pager" class="pager price-pager"><span id="price-page-note" role="status" aria-live="polite"></span><button type="button" id="price-prev">上一页</button><button type="button" id="price-next">下一页</button></div>
+        <section id="price-editor" class="price-editor" aria-labelledby="price-editor-title" hidden><div class="panel-head"><h3 id="price-editor-title">手工价格覆盖</h3><button type="button" id="price-cancel">取消编辑</button></div><p class="muted">单位：USD / 百万 Token。留空表示缺价，0 表示免费。Provider 留空为模型通用价格。保存需要管理登录；只保存手工覆盖，不改写公共目录。</p><div class="price-editor-fields"><label>原始模型名<input id="price-edit-model" type="text" autocomplete="off" /></label><label>Provider（留空通用）<input id="price-edit-provider" type="text" autocomplete="off" /></label><label>输入<input id="price-edit-input" type="text" inputmode="decimal" placeholder="缺价" /></label><label>输出<input id="price-edit-output" type="text" inputmode="decimal" placeholder="缺价" /></label><label>缓存读取<input id="price-edit-cache_read" type="text" inputmode="decimal" placeholder="缺价" /></label><label>缓存写入<input id="price-edit-cache_write" type="text" inputmode="decimal" placeholder="缺价" /></label></div><div class="price-editor-actions"><button type="button" id="price-save" class="primary">保存手工覆盖</button><button type="button" id="price-remove" class="danger" disabled>删除手工覆盖</button><span id="price-edit-status" role="status" aria-live="polite"></span></div></section>
+      </section>
+    </section>
+    <section id="tab-log" role="tabpanel" aria-labelledby="tab-log-btn" tabindex="0" hidden><section class="panel"><div class="panel-head"><h2>调用日志</h2><div class="header-actions"><span id="log-note" class="muted"></span><div id="log-size" class="seg" role="group" aria-label="读取条数"><button type="button" data-tail="200" aria-pressed="true">200 条</button><button type="button" data-tail="1000" aria-pressed="false">1000 条</button><button type="button" data-tail="5000" aria-pressed="false">最多 5000 条</button></div><button type="button" id="log-refresh">刷新</button><button type="button" id="log-export" disabled>导出</button></div></div><p class="muted">调用日志含会话标识，导出文件请妥善保管。调用日志默认关闭，不记录消息正文。日志不应用顶部筛选，不自动滚动刷新。</p><p id="log-status" role="status" aria-live="polite">尚未读取调用日志。</p><pre id="log-body" class="log"></pre></section></section>
+    <section id="tab-manage" role="tabpanel" aria-labelledby="tab-manage-btn" hidden>
+      <section class="panel">
+        <h2>采集设置</h2>
+        <div id="settings-fields" class="settings-fields" role="group" aria-label="采集设置">
+          <label class="setting-toggle"><input id="settings-enabled" type="checkbox" disabled>启用用量采集</label>
+          <label class="setting-toggle"><input id="settings-detail-history" type="checkbox" aria-describedby="settings-detail-hint" disabled>保存调用明细</label>
+          <label>保留天数<input id="settings-keep-days" type="number" min="0" max="3650" step="1" inputmode="numeric" disabled><small>0 表示不按日期清理</small></label>
+          <label>明细数量上限<input id="settings-max-events" type="number" min="1" max="200000" step="1" inputmode="numeric" disabled></label>
+        </div>
+        <p id="settings-detail-hint" class="muted" hidden></p>
+        <p class="muted settings-privacy">明细包含时间、结果、用量和耗时，不保存正文或密钥。缩小保留范围会在保存统计时清理旧数据。</p>
+        <p id="settings-runtime" class="muted" role="status" aria-live="polite"></p>
+        <div class="actions settings-actions"><button type="button" id="settings-save" class="primary" disabled>保存设置</button><button type="button" id="settings-revert" disabled>还原未保存修改</button></div>
+        <p id="settings-status" class="message" role="status" aria-live="polite">正在读取采集设置。</p>
+      </section>
+      <section class="panel">
+        <h2>数据覆盖</h2>
+        <p id="collection-status" role="status"></p>
+        <dl id="coverage" class="metrics"></dl><ul id="coverage-warnings"></ul>
+        <p class="muted">旧汇总保留调用数、失败数与 Token 用量，但没有逐调用结果、时间或耗时。结果或子日时间筛选会排除不能精确匹配的旧汇总，并报告数量；字段缺失不等于 0。</p>
+        <details id="runtime-diagnostics">
+          <summary>运行诊断</summary>
+          <p class="muted">采集包装方法数按类和方法计数，用于确认运行时采集范围。</p>
+          <dl id="runtime-details" class="metrics"></dl>
+          <h3>包装方法清单</h3><ul id="wrapped-methods"></ul>
+        </details>
+        <div class="danger-zone"><h2>重置统计</h2><p class="muted">清空已保存的用量与调用明细。操作需要二次确认；执行前请备份需要保留的数据。</p><div class="actions"><button type="button" class="danger" id="reset-stats">重置</button><button type="button" id="reset-cancel" hidden>取消重置</button></div><p id="reset-status" class="message" role="status" aria-live="polite"></p></div>
+      </section>
+    </section>
+  </main>
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
+  <script src="./dashboard.js?v=0.3.2"></script>
+  <script src="./app.js?v=0.3.2"></script>
+</body>
 </html>

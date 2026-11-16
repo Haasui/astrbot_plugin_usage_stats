@@ -2,7 +2,7 @@
   "metadata": {
     "display_name": "Usage Stats",
     "short_desc": "Per-plugin attribution of model token usage — see who the money goes to.",
-    "desc": "AstrBot's built-in usage statistics only cover the main conversation. Once a dozen plugins are installed, several of them call models on their own, and those calls show up on the bill with no way to tell who made them.\n\nThis plugin patches the provider layer, records every model call, and attributes it to the plugin that made it. Use /usage for the ranking, or the WebUI page for charts.\n\n[Why it has to reach outside] The official hook on_llm_request only covers the main conversation. Calls made by plugins go through context.llm_generate, which calls provider.text_chat directly and never passes through the filter pipeline. Without wrapping the provider there is no way to see that half of the traffic.\n\n[The disciplines] Read-only, off by default, strictly restored on unload. Bookkeeping failures are always swallowed and never affect a conversation.\n\n[How attribution works] Walk up the call stack to the first data.plugins.* module name. Nothing found means the main conversation.\n\n[What is stored] Counts per plugin x day x model, kept 60 days by default. Counts only — no message bodies."
+    "desc": "AstrBot's built-in usage statistics only cover the main conversation. Once a dozen plugins are installed, several of them call models on their own, and those calls show up on the bill with no way to tell who made them.\n\nThis plugin patches the provider layer, records every model call, and attributes it to the plugin that made it. Use /usage for the ranking, or the WebUI page for charts.\n\n[Why it has to reach outside] The official hook on_llm_request only covers the main conversation. Calls made by plugins go through context.llm_generate, which calls provider.text_chat directly and never passes through the filter pipeline. Without wrapping the provider there is no way to see that half of the traffic.\n\n[The disciplines] Read-only, off by default, strictly restored on unload. Bookkeeping failures are always swallowed and never affect a conversation.\n\n[How attribution works] Walk up the call stack to the first data.plugins.* module name. Nothing found means the main conversation.\n\n[What is stored] Counts per plugin x day x model, kept 60 days by default. Daily counts by default, with optional structured request history and timing. No message bodies or API keys."
   },
   "config": {
     "enabled": {
@@ -11,7 +11,7 @@
     },
     "memory_cap": {
       "description": "Records kept in memory",
-      "hint": "Default 20000. When exceeded, this batch is saved first, then the oldest records are dropped. Set 0 for no limit."
+      "hint": "Default 20000. Saves and clears the call buffer when exceeded. Failed persistence retains pending calls, so memory may temporarily exceed this value. Set 0 for no limit."
     },
     "keep_days": {
       "description": "Days of history to keep on disk",
@@ -32,6 +32,14 @@
     "call_log_lines": {
       "description": "Lines kept in the call log",
       "hint": "Default 20000. The file is trimmed only once it reaches twice that, so appending does not rewrite the whole file every time. Set 0 to keep everything."
+    },
+    "detail_history": {
+      "description": "Store structured call history",
+      "hint": "Off by default. Stores time, source plugin, model, result, tokens and timing for detailed charts and request history. No session identifiers, message bodies or API keys are stored. Existing daily totals cannot be expanded into individual calls."
+    },
+    "detail_max_events": {
+      "description": "Maximum detailed history records",
+      "hint": "Default 20000, bounded to 1 through 200000. Prunes old details after daily totals commit and follows keep_days. Recovery details can temporarily exceed this target while persistence fails."
     },
     "debug": {
       "description": "Debug logging",

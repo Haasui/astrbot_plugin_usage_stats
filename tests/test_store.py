@@ -417,8 +417,33 @@ def test_save_failure_is_not_fatal(d: pathlib.Path) -> None:
     assert store.save(blocker / "sub" / "u.json", {"p": {}}) is False
 
 
+def test_cache_and_optional_usage_round_trip_without_inflating_total() -> None:
+    d = day_key(DAY)
+    call = Call("p", "q", "m", DAY, Usage(10, 20, 30, 1, 7, 9, 1))
+    snap = store.snapshot(fold_by_day_model([call]))
+    merged = store.merge(snap, snap)
+    cell = merged["p"][d]["q|m"]
+    assert cell["total"] == 120 and cell["cache_reported"] == 2
+    assert cell["reasoning"] == 14 and cell["cache_write"] == 18
+    assert cell["usage_reported"] == 2
+    restored = store.as_buckets(merged)["p"][d]["q|m"].usage
+    assert restored == call.usage + call.usage
+    legacy = store.as_buckets({"p": {d: {"m": {"input_other": 5}}}})["p"][d]["m"].usage
+    assert legacy.reasoning is None and legacy.cache_write is None
+    unknown = store.merge({"p": {d: {"m": {"calls": 1}}}}, {"p": {d: {"m": {"calls": 1}}}})
+    assert unknown["p"][d]["m"].get("reasoning") is None
+
+
+def test_merge_cache_reported_is_not_a_token() -> None:
+    cell = {"input_other": 1, "input_cached": 2, "output": 3, "cache_reported": 1}
+    data = {"p": {"day": {"m": cell}}}
+    assert store.merge(data, data)["p"]["day"]["m"]["total"] == 12
+
+
 def main() -> None:
     pure = [
+        test_cache_and_optional_usage_round_trip_without_inflating_total,
+        test_merge_cache_reported_is_not_a_token,
         test_snapshot_uses_bucket_dict,
         test_merge_adds_and_recomputes_total,
         test_merge_does_not_mutate_inputs,

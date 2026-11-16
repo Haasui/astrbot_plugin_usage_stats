@@ -94,8 +94,8 @@ MUTATIONS = [
      CONFIG, "test_hints_do_not_describe_progress"),
     # --- 视图层的三条回归：它们对应的错误肉眼看不出来，只有测试能拦 ---
     ("空范围复活旧表", VIEW,
-     '    last = { groups: groups, grand: grand, mode: mode };\n    applySortIndicator();\n\n    if (!groups.length) {\n      $("table").hidden = true;\n      $("empty").hidden = false;\n      return;\n    }\n    $("empty").hidden = true;\n    $("table").hidden = false;\n    groups = sortRows(groups, state.sort);',
-     '    if (!groups.length) {\n      $("table").hidden = true;\n      $("empty").hidden = false;\n      return;\n    }\n    $("empty").hidden = true;\n    $("table").hidden = false;\n\n    last = { groups: groups, grand: grand, mode: mode };\n    applySortIndicator();\n    groups = sortRows(groups, state.sort);',
+     '    last = { groups: groups, grand: grand, mode: mode };\n    applySortIndicator();\n\n    if (!groups.length) {\n      $("table").hidden = true;\n      $("table-scroll").hidden = true;\n      $("table-scroll-hint").hidden = true;\n      $("empty").hidden = false;\n      return;\n    }\n    $("empty").hidden = true;\n    $("table-scroll").hidden = false;\n    $("table-scroll-hint").hidden = false;\n    $("table").hidden = false;\n    groups = sortRows(groups, state.sort);',
+     '    if (!groups.length) {\n      $("table").hidden = true;\n      $("table-scroll").hidden = true;\n      $("table-scroll-hint").hidden = true;\n      $("empty").hidden = false;\n      return;\n    }\n    $("empty").hidden = true;\n    $("table-scroll").hidden = false;\n    $("table-scroll-hint").hidden = false;\n    $("table").hidden = false;\n\n    last = { groups: groups, grand: grand, mode: mode };\n    applySortIndicator();\n    groups = sortRows(groups, state.sort);',
      VIEW_SMOKE, "空范围下点表头没有复活旧表"),
     ("旧响应盖掉新响应", VIEW,
      "        if (seq !== loadSeq) return;   // 有更新的请求在飞，这次的结果丢掉\n        render(data);",

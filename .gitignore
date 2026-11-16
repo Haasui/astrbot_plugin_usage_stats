@@ -10,3 +10,5 @@ env/
 *.log
 data/
 _preview/
+.test-tmp/
+_dist/

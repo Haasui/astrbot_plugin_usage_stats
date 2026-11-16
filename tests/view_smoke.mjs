@@ -1,545 +1,387 @@
-/* 视图冒烟测试：用最小 DOM 桩在 Node 里真的执行一次 app.js。
- *
- *     node tests/view_smoke.mjs
- *
- * 这不是浏览器测试，也不验证样式。它能抓到的是：函数名写错、属性不存在、
- * 字段填错、id 与 DOM 对不上这类运行时错误 —— 这些在浏览器里往往也是静默失效。
- * 需要 Node（开发时用，进不了插件包）。
- */
+/* Dependency-free runtime regression tests. Run: node tests/view_smoke.mjs.
+ * The upgraded UI uses the dashboard contract; protections from the legacy smoke
+ * remain: output propagation, grouping, sorting/empty state, drill filters, races,
+ * chart keyboard access and arithmetic, themes, reset confirmation, bounded logs.
+ * This DOM stub does not validate browser layout. */
+import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-// 三个视图文件就在本测试的上一级
-const BASE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "views", "usage");
-const html = fs.readFileSync(BASE + "/index.html", "utf8");
-const src = fs.readFileSync(BASE + "/app.js", "utf8");
-const IDS = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
-
-function makeNode(tag) {
-  const node = {
-    tagName: tag,
-    children: [],
-    _text: "",
-    _cls: "",
-    style: {},
-    dataset: {},
-    hidden: false,
-    disabled: false,
-    type: "",
-    _ls: {},
-    get textContent() { return this._text; },
-    set textContent(v) { this._text = String(v); this.children = []; },
-    get className() { return this._cls; },
-    set className(v) { this._cls = String(v); },
-    appendChild(c) { this.children.push(c); return c; },
-    append(...cs) { cs.forEach((c) => this.children.push(c)); },
-    addEventListener(type, fn) { (this._ls[type] = this._ls[type] || []).push(fn); },
-    setAttribute(k, v) { this[k] = v; },
-    removeAttribute(k) { delete this[k]; },
-    getAttribute(k) { return this[k] === undefined ? null : this[k]; },
-    hasAttribute(k) { return this[k] !== undefined; },
-    classList: { add() {}, remove() {}, toggle() {} },
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
-    closest: () => null,
+import vm from "node:vm";
+const base = new URL("../views/usage/", import.meta.url);
+const html = fs.readFileSync(new URL("index.html", base), "utf8");
+const helper = fs.readFileSync(new URL("dashboard.js", base), "utf8");
+const source = fs.readFileSync(new URL("app.js", base), "utf8");
+function node(tag) {
+  const n = { tagName: tag, children: [], parentNode: null, dataset: {}, style: {}, attrs: {}, listeners: {}, value: "", checked: false, disabled: false, hidden: false, tabIndex: -1, _text: "", _cls: "",
+    get textContent() { return this._text + this.children.map(c => c.textContent).join(""); },
+    set textContent(text) { this._text = String(text); this.children.forEach(c => c.parentNode = null); this.children = []; },
+    get className() { return this._cls; }, set className(value) { this._cls = value; },
+    appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
+    remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(c => c !== this); this.parentNode = null; },
+    addEventListener(event, fn) { (this.listeners[event] ||= []).push(fn); },
+    setAttribute(key, value) { this.attrs[key] = String(value); if (key === "tabindex") this.tabIndex = Number(value); if (key.startsWith("data-")) this.dataset[key.slice(5)] = String(value); },
+    getAttribute(key) { return this.attrs[key] ?? null; }, removeAttribute(key) { delete this.attrs[key]; }, hasAttribute(key) { return key in this.attrs; },
+    closest(selector) { const m = /^button(?:\[data-([a-z-]+)\])?$/.exec(selector); if (m && this.tagName === "button" && (!m[1] || m[1] in this.dataset)) return this; return this.parentNode?.closest(selector) || null; },
+    focus() { this.focused = true; fire(this, "focus"); }, click() { fire(this, "click"); }
   };
-  return node;
+  n.classList = { add(c) { if (!n._cls.split(" ").includes(c)) n._cls += " " + c; }, remove(c) { n._cls = n._cls.split(" ").filter(x => x !== c).join(" "); }, toggle(c, on) { if (on) this.add(c); else this.remove(c); } };
+  return n;
 }
-
-/* 触发节点上登记过的监听器。桩不做事件冒泡，够用。 */
-function fire(node, type, ev) {
-  (node._ls[type] || []).forEach((fn) => fn(ev || {}));
-}
-
-const registry = new Map();
-function byId(id) {
-  if (!registry.has(id)) registry.set(id, makeNode("div"));
-  return registry.get(id);
-}
-for (const id of IDS) byId(id);
-
-// 分段控件要有 4 个带 data-days 的子按钮，syncRange 才跑得动
-const range = byId("range");
-range.children = ["1", "7", "30", "0"].map((d) => {
-  const b = makeNode("button");
-  b.dataset.days = d;
-  return b;
-});
-
-// 分组切换同理：两个带 data-group 的按钮，syncGroup 才跑得动
-const groupSeg = byId("group");
-groupSeg.children = ["plugin", "model"].map((g) => {
-  const b = makeNode("button");
-  b.dataset.group = g;
-  return b;
-});
-
-const store = new Map();
-const sample = {
-  total_tokens: 259212, patched: 4, recorded: 35, range_days: 30, generated_at: "20:11:00",
-  series: [
-    { day: "2026-10-15", calls: 5, total: 40000 },
-    { day: "2026-10-16", calls: 30, total: 219212 },
-  ],
-  series_by_plugin: {
-    astrbot_plugin_angel_heart: [
-      { day: "2026-10-15", calls: 2, total: 30000 },
-      { day: "2026-10-16", calls: 27, total: 114038 },
-    ],
-    main_agent: [
-      { day: "2026-10-15", calls: 2, total: 10000 },    // 必须和 series 的当天合计对得上，
-      { day: "2026-10-16", calls: 3, total: 105174 },    // 否则堆叠柱上方会空一块
-    ],
-  },
-  focus_series: [{ day: "2026-10-16", calls: 29, total: 144038 }],
-  previous: { tokens: 200000, calls: 50, failed: 0, images: 0,
-              input_other: 100000, input_cached: 100000, output: 0 },
-  plugins: [
-    { name: "astrbot_plugin_angel_heart", total: 144038, calls: 29, failed: 0, images: 0,
-      cache_hit: "15%", input_other: 122432, input_cached: 21606, output: 240,
-      cache_reported: 29,
-      models: [{ name: "openai|R1", total: 144038, calls: 29, failed: 0, images: 0,
-                 cache_hit: "15%", output: 240 }] },
-    { name: "main_agent", total: 115174, calls: 40, failed: 1, images: 2,
-      cache_hit: "80%", input_other: 23035, input_cached: 92139, output: 1000,
-      cache_reported: 40, models: [] },
-  ],
-};
-
-let lastParams = null;
-let payload = sample;   // 换掉它就能模拟「这个范围没有记录」
-let defer = null;       // 设成数组就进入挂起模式，用来造请求竞态
-const posted = [];      // POST 出去的请求：「重置」按钮必须真的发请求
-
-const win = {
-  matchMedia: () => ({ matches: false, addEventListener() {} }),
-  localStorage: {
-    getItem: (k) => (store.has(k) ? store.get(k) : null),
-    setItem: (k, v) => store.set(k, String(v)),
-  },
-  AstrBotPluginPage: {
-    ready: async () => ({ isDark: true }),
-    apiGet: (path, params) => {
-      lastParams = params;
-      if (defer) return new Promise((resolve) => { defer.push({ resolve, params }); });
-      return Promise.resolve(payload);
-    },
-    apiPost: (path, body) => {
-      posted.push({ path, body });
-      return Promise.resolve({ baseline_plugins: 3, memory_calls: 7, saved: true });
-    },
-  },
-};
-const doc = {
-  documentElement: makeNode("html"),
-  getElementById: byId,
-  createElement: makeNode,
-  createElementNS: (_ns, tag) => makeNode(tag),
-  createTextNode: (t) => ({ tagName: "#text", textContent: t }),
-};
-
-new Function("window", "document", "setInterval", src)(win, doc, () => 0);
-
-/* ---- 首屏：数据还没回来，应该铺着骨架而不是空白 ---- */
-const skeletonRows = byId("tbody").children.filter((r) => r.className === "skeleton-row").length;
-const skeletonOk = skeletonRows === 4 && byId("table").hidden === false;
-console.log((skeletonOk ? "  ok   " : "  FAIL ") + "首屏骨架行数 = " + skeletonRows + "，表格可见 = " + (byId("table").hidden === false));
-let bad = skeletonOk ? 0 : 1;
-
-await new Promise((r) => setTimeout(r, 30));
-
-const checks = [
-  ["kpi-total", "259,212"],
-  ["kpi-calls", "69"],
-  ["kpi-failed", "1"],
-  ["kpi-in", "145,467"],     // 259212 - 113745
-  ["kpi-cached", "113,745"],
-  ["kpi-out", "1,240"],      // 240 + 1000
-];
-for (const [id, want] of checks) {
-  const got = byId(id).textContent;
-  const ok = got === want;
-  if (!ok) bad++;
-  console.log((ok ? "  ok   " : "  FAIL ") + id + " = " + JSON.stringify(got) + (ok ? "" : "  期望 " + JSON.stringify(want)));
-}
-/* ---- 分组控件：默认按插件，提示为空 ---- */
-const groupHintOk = byId("group-hint").textContent === "";
-const groupNoteOk = byId("table-note").textContent === "共 2 个插件";
-console.log((groupHintOk && groupNoteOk ? "  ok   " : "  FAIL ")
-  + "默认按插件分组（提示「" + byId("group-hint").textContent + "」，表注「" + byId("table-note").textContent + "」）");
-if (!(groupHintOk && groupNoteOk)) bad++;
-
-const rows = byId("tbody").children.length;
-console.log((rows >= 3 ? "  ok   " : "  FAIL ") + "表格行数 = " + rows + "（期望 >= 3：两个插件 + 一个模型）");
-if (rows < 3) bad++;
-const legend = byId("legend");
-const legendOk = legend.hidden === false && legend.children.length >= 2;
-console.log((legendOk ? "  ok   " : "  FAIL ") + "图例 hidden=" + legend.hidden + " 条目=" + legend.children.length);
-if (!legendOk) bad++;
-
-/* ---- 输出列：接口给了 output，表格就得把它显示出来 ----
-   0.2.3 的真 bug：buildGroups 归一化时手抄字段、漏了 output，表格那格一路是 0。
-   KPI 读的是接口原样的对象，所以上面那组 KPI 断言全绿 —— 光看数字对不上，
-   得直接查单元格。 */
-function nameOf(row) {
-  const first = row.children[0];
-  if (row.className === "row-model") return first.children[0].textContent;
-  return first.children[0].children[1].textContent;
-}
-function outCell(name) {
-  const row = byId("tbody").children.filter((r) => nameOf(r) === name)[0];
-  return row ? row.children[6].textContent : "(没有这一行)";
-}
-const outChecks = [
-  ["astrbot_plugin_angel_heart", "240"],
-  ["main_agent", "1,000"],
-  ["openai|R1", "240"],        // 模型子行
-];
-for (const [name, want] of outChecks) {
-  const got = outCell(name);
-  const ok = got === want;
-  if (!ok) bad++;
-  console.log((ok ? "  ok   " : "  FAIL ") + "「" + name + "」的输出列 = " + JSON.stringify(got) + (ok ? "" : "  期望 " + JSON.stringify(want)));
-}
-
-/* 按模型分组：父行是模型、子行是插件，两边的输出同样要带过去 */
-const modelGroupBtn = groupSeg.children[1];
-fire(byId("group"), "click", { target: { closest: () => modelGroupBtn } });
-const modelModeOut = [outCell("openai|R1"), outCell("astrbot_plugin_angel_heart")];
-const modelModeOk = modelModeOut[0] === "240" && modelModeOut[1] === "240";
-if (!modelModeOk) bad++;
-console.log((modelModeOk ? "  ok   " : "  FAIL ") + "按模型分组的输出列 = " + JSON.stringify(modelModeOut) + "（父行/子行都应为 240）");
-fire(byId("group"), "click", { target: { closest: () => groupSeg.children[0] } });   // 切回按插件，后面的断言按这个顺序写
-
-/* ---- 图表的算术：高度按比例、堆叠段正好铺满 ---- */
-const barCols = byId("chart").children[0].children;
-const heights = barCols.map((c) => parseFloat(c.children[0].style.height));
-const peak = Math.max(...sample.series.map((d) => d.total));
-const peakIndex = sample.series.findIndex((d) => d.total === peak);
-const heightOk = heights[peakIndex] === 100;
-console.log((heightOk ? "  ok   " : "  FAIL ") + "最高的柱子 = " + heights[peakIndex] + "%（应为 100）");
-if (!heightOk) bad++;
-const otherIndex = peakIndex === 0 ? 1 : 0;
-const wantHeight = Math.max(2, Math.round((sample.series[otherIndex].total / peak) * 100));
-const propOk = heights[otherIndex] === wantHeight;
-console.log((propOk ? "  ok   " : "  FAIL ") + "另一根按比例 = " + heights[otherIndex] + "%（应为 " + wantHeight + "%）");
-if (!propOk) bad++;
-const stackSums = barCols.map((c) =>
-  c.children[0].children.reduce((sum, seg) => sum + parseFloat(seg.style.height), 0));
-const stackOk = stackSums.every((sum) => Math.abs(sum - 100) < 0.01);
-console.log((stackOk ? "  ok   " : "  FAIL ") + "每天堆叠段之和 = " + stackSums.map((s) => s.toFixed(2)).join(" / ") + "（应为 100）");
-if (!stackOk) bad++;
-const meterWidths = byId("tbody").children
-  .filter((r) => r.className === "row-plugin")
-  .map((r) => parseFloat(r.children[2].children[0].children[0].style.width));
-const meterSum = meterWidths.reduce((a, b) => a + b, 0);
-const meterOk = Math.abs(meterSum - 100) <= 1;
-console.log((meterOk ? "  ok   " : "  FAIL ") + "插件占比条之和 = " + meterSum + "%（约 100）");
-if (!meterOk) bad++;
-let ceiling = 0;
-let nestedOk = true;
-byId("tbody").children.forEach((row) => {
-  const width = parseFloat(row.children[2].children[0].children[0].style.width);
-  if (row.className === "row-plugin") ceiling = width;
-  else if (row.className === "row-model" && width > ceiling) nestedOk = false;
-});
-console.log((nestedOk ? "  ok   " : "  FAIL ") + "模型行的占比条不超过它的插件行");
-if (!nestedOk) bad++;
-/* ---- 环比文案 ---- */
-function subText(id) {
-  var node = byId(id);
-  return node.children.map(function (c) { return c.textContent; }).join("");
-}
-const deltaChecks = [
-  ["kpi-total-sub", "↑ 30% 较上一周期"],   // 259212 vs 200000
-  ["kpi-calls-sub", "↑ 38% 较上一周期"],   // 69 vs 50
-  ["kpi-failed-sub", "新增"],              // 1 vs 0：上一周期是 0，不给百分比
-  ["kpi-cached-sub", "↓ 6pt 较上一周期"],   // 43.9% vs 50.0%
-];
-for (const [id, want] of deltaChecks) {
-  const text = subText(id);
-  const ok = text.indexOf(want) >= 0;
-  if (!ok) bad++;
-  console.log((ok ? "  ok   " : "  FAIL ") + id + " 含 " + JSON.stringify(want) + "  实际 " + JSON.stringify(text));
-}
-
-const status = byId("status-text").textContent;
-const statusOk = /补丁 4 处/.test(status);
-console.log((statusOk ? "  ok   " : "  FAIL ") + "状态 = " + JSON.stringify(status));
-if (!statusOk) bad++;
-console.log((doc.documentElement.theme === undefined ? "  ok   " : "  FAIL ") + "主题属性 = " + JSON.stringify(doc.documentElement["data-theme"]));
-const themeOk = doc.documentElement["data-theme"] === "dark";   // 宿主说 isDark=true
-if (!themeOk) bad++;
-/* ---- 图表的 roving tabindex ---- */
-function cols() { return byId("chart").children[0].children; }
-function tabbables() { return cols().filter((c) => c.tabIndex === 0); }
-let rovingOk = tabbables().length === 1 && cols()[0].tabIndex === 0;
-console.log((rovingOk ? "  ok   " : "  FAIL ") + "整张图 Tab 停留点 = " + tabbables().length + "（应为 1）");
-if (!rovingOk) bad++;
-fire(byId("chart").children[0], "keydown", { target: cols()[0], key: "ArrowRight", preventDefault() {} });
-rovingOk = cols()[0].tabIndex === -1 && cols()[1].tabIndex === 0;
-console.log((rovingOk ? "  ok   " : "  FAIL ") + "按右方向键后停在第二根柱子");
-if (!rovingOk) bad++;
-fire(byId("chart").children[0], "keydown", { target: cols()[1], key: "End", preventDefault() {} });
-// 样例只有 2 根柱子，「最后一根」就是 index 1，所以这里查第一根已交停留点
-rovingOk = cols()[cols().length - 1].tabIndex === 0 && cols()[0].tabIndex === -1;
-console.log((rovingOk ? "  ok   " : "  FAIL ") + "按 End 跳到最后一根");
-if (!rovingOk) bad++;
-fire(byId("chart").children[0], "keydown", { target: cols()[cols().length - 1], key: "ArrowRight", preventDefault() {} });
-rovingOk = cols()[cols().length - 1].tabIndex === 0;
-console.log((rovingOk ? "  ok   " : "  FAIL ") + "到末尾再按右键不会越界");
-if (!rovingOk) bad++;
-
-/* ---- 排序：点表头应该真的改变行序 ---- */
-function firstName() {
-  var row = byId("tbody").children[0];
-  return row.children[0].children[0].children[1].textContent;
-}
-const before = firstName();
-fire(byId("sort-calls"), "click");
-const after = firstName();
-const sortOk = before === "astrbot_plugin_angel_heart" && after === "main_agent";
-console.log((sortOk ? "  ok   " : "  FAIL ") + '按调用排序：' + before + " → " + after);
-if (!sortOk) bad++;
-const aria = byId("th-calls")["aria-sort"];
-const ariaOk = aria === "descending";
-console.log((ariaOk ? "  ok   " : "  FAIL ") + "aria-sort = " + JSON.stringify(aria));
-if (!ariaOk) bad++;
-// 再点一次翻成升序
-fire(byId("sort-calls"), "click");
-const ascOk = firstName() === "astrbot_plugin_angel_heart" && byId("th-calls")["aria-sort"] === "ascending";
-console.log((ascOk ? "  ok   " : "  FAIL ") + "再点一次翻成升序，首行 = " + firstName());
-if (!ascOk) bad++;
-
-/* ---- 收起后刷新，不该自己弹回来 ---- */
-function modelRows() {
-  return byId("tbody").children.filter((r) => r.className === "row-model");
-}
-const firstToggle = byId("tbody").children[0].children[0].children[0];   // tr > td > button.toggle
-fire(firstToggle, "click");
-let hiddenModels = modelRows().filter((r) => r.hidden === true).length;
-const collapseOk = firstToggle.getAttribute("aria-expanded") === "false" && hiddenModels === 1;
-console.log((collapseOk ? "  ok   " : "  FAIL ") + "点插件名收起：aria-expanded=false，隐藏 " + hiddenModels + " 行模型");
-if (!collapseOk) bad++;
-fire(byId("refresh"), "click");
-await new Promise((r) => setTimeout(r, 10));
-hiddenModels = modelRows().filter((r) => r.hidden === true).length;
-const persisted = hiddenModels === 1 && byId("tbody").children[0].children[0].children[0].getAttribute("aria-expanded") === "false";
-console.log((persisted ? "  ok   " : "  FAIL ") + "刷新后收起状态还在（隐藏 " + hiddenModels + " 行）");
-if (!persisted) bad++;
-fire(byId("tbody").children[0].children[0].children[0], "click");   // 展开回去，免得挡住后面的断言
-
-/* ---- 模型级下钻：点模型行的「趋势」应把 plugin/model 发给服务端 ---- */
-function modelRowButton() {
-  for (const row of byId("tbody").children) {
-    if (row.className && row.className.indexOf("row-model") >= 0) {
-      return row.children[0].children[1];
+function fire(n, type, event = {}) { for (const fn of n.listeners[type] || []) fn({ target: n, preventDefault() {}, ...event }); }
+function parse() {
+  const registry = new Map(), root = node("root"), stack = [root];
+  for (const match of html.matchAll(/<\/?([a-zA-Z][\w-]*)([^>]*)>/g)) {
+    const [text, tag, attr] = match;
+    if (text.startsWith("</")) { if (stack.at(-1).tagName === tag) stack.pop(); continue; }
+    const n = node(tag);
+    for (const a of attr.matchAll(/([\w-]+)(?:="([^"]*)")?/g)) {
+      const key = a[1], value = a[2] ?? ""; n.setAttribute(key, value);
+      if (key === "id") registry.set(value, n); if (key === "value") n.value = value;
+      if (key === "hidden") n.hidden = true; if (key === "disabled") n.disabled = true;
     }
+    stack.at(-1).appendChild(n);
+    if (!["meta", "link", "input", "br", "hr"].includes(tag) && !text.endsWith("/>")) stack.push(n);
   }
-  return null;
+  return registry;
 }
-const drill = modelRowButton();
-const hasDrill = Boolean(drill) && drill.className.indexOf("focus-btn") >= 0;
-console.log((hasDrill ? "  ok   " : "  FAIL ") + "模型行有「趋势」按钮: " + (hasDrill ? "有" : "没有"));
-if (!hasDrill) bad++;
-if (hasDrill) {
-  fire(drill, "click");
-  await new Promise((r) => setTimeout(r, 10));
-  const drillOk = lastParams && lastParams.plugin === "astrbot_plugin_angel_heart" && lastParams.model === "openai|R1";
-  console.log((drillOk ? "  ok   " : "  FAIL ") + "下钻参数 = " + JSON.stringify(lastParams));
-  if (!drillOk) bad++;
-  const summary = byId("summary").textContent;
-  const labelOk = summary.indexOf("astrbot_plugin_angel_heart · openai|R1") === 0;
-  console.log((labelOk ? "  ok   " : "  FAIL ") + "摘要标出下钻目标 = " + JSON.stringify(summary));
-  if (!labelOk) bad++;
-}
-
-/* ---- 下钻目标在这个范围里消失：不许静默降级 ---- */
-const clearBtn = byId("chart-clear");
-const clearShown = clearBtn.hidden === false;
-console.log((clearShown ? "  ok   " : "  FAIL ") + "下钻时标题旁出现「取消下钻」");
-if (!clearShown) bad++;
-
-// 换成「插件还在、它那个模型在这个范围里没有记录」的数据
-const noModel = Object.assign({}, sample, {
-  plugins: sample.plugins.map((p) =>
-    p.name === "astrbot_plugin_angel_heart" ? Object.assign({}, p, { models: [] }) : p),
-});
-payload = noModel;
-fire(byId("refresh"), "click");
-await new Promise((r) => setTimeout(r, 10));
-const focusTitle = byId("chart-focus").textContent;
-const keptFocus = focusTitle.indexOf("openai|R1") >= 0 && focusTitle.indexOf("没有记录") >= 0;
-console.log((keptFocus ? "  ok   " : "  FAIL ") + "模型没记录时保留下钻并写明原因：" + JSON.stringify(focusTitle));
-if (!keptFocus) bad++;
-
-fire(clearBtn, "click");
-await new Promise((r) => setTimeout(r, 10));
-const clearedOk = !lastParams.plugin && !lastParams.model && byId("chart-clear").hidden === true;
-console.log((clearedOk ? "  ok   " : "  FAIL ") + "标题旁的取消能清掉下钻，参数 = " + JSON.stringify(lastParams));
-if (!clearedOk) bad++;
-payload = sample;
-fire(byId("refresh"), "click");
-await new Promise((r) => setTimeout(r, 10));
-
-/* ---- 切到空范围后点排序，不该把上一个范围的表复活 ---- */
-const emptyPayload = { total_tokens: 0, patched: 4, recorded: 0, series: [], series_by_plugin: {}, plugins: [] };
-payload = emptyPayload;
-fire(byId("refresh"), "click");
-await new Promise((r) => setTimeout(r, 10));
-const emptyShown = byId("table").hidden === true && byId("empty").hidden === false;
-console.log((emptyShown ? "  ok   " : "  FAIL ") + "空范围：表格收起、空态显示");
-if (!emptyShown) bad++;
-fire(byId("sort-calls"), "click");
-const notRevived = byId("table").hidden === true && byId("tbody").children.length === 0;
-console.log((notRevived ? "  ok   " : "  FAIL ") + "空范围下点表头没有复活旧表");
-if (!notRevived) bad++;
-
-/* ---- 请求竞态：先发的后到，不该盖掉后发的 ---- */
-payload = sample;
-const newer = Object.assign({}, sample, { total_tokens: 111111 });
-defer = [];
-fire(byId("refresh"), "click");
-fire(byId("refresh"), "click");
-await new Promise((r) => setTimeout(r, 5));
-const pending = defer.slice();
-defer = null;
-pending[1].resolve(newer);          // 后发的先回
-await new Promise((r) => setTimeout(r, 10));
-pending[0].resolve(sample);         // 先发的后回（旧数据）
-await new Promise((r) => setTimeout(r, 10));
-const raceOk = byId("kpi-total").textContent === "111,111";
-console.log((raceOk ? "  ok   " : "  FAIL ") + "竞态：旧响应没盖掉新响应，当前 = " + byId("kpi-total").textContent);
-if (!raceOk) bad++;
-
-/* ---- 起一个全新的实例（自己的 DOM 桩），用来单独验一件事 ---- */
-function bootWith(apiGetImpl) {
-  const reg = new Map();
-  const get = (id) => {
-    if (!reg.has(id)) reg.set(id, makeNode("div"));
-    return reg.get(id);
-  };
-  for (const id of IDS) get(id);
-  const range = get("range");
-  range.children = ["1", "7", "30", "0"].map((d) => {
-    const node = makeNode("button");
-    node.dataset.days = d;
-    return node;
-  });
-  const doc = {
-    documentElement: makeNode("html"),
-    getElementById: get,
-    createElement: makeNode,
-    createElementNS: (_ns, tag) => makeNode(tag),
-    createTextNode: (value) => ({ tagName: "#text", textContent: value }),
-  };
-  const win = {
-    matchMedia: () => ({ matches: false, addEventListener() {} }),
-    localStorage: { getItem: () => null, setItem() {} },
-    AstrBotPluginPage: {
-      ready: async () => ({ isDark: false }),
-      apiGet: apiGetImpl,
-    },
-  };
-  new Function("window", "document", "setInterval", src)(win, doc, () => 0);
-  return { byId: get };
-}
-
-/* ---- 首屏就失败：骨架要收掉，不能一直转 ---- */
-const realTimeout = globalThis.setTimeout;
-globalThis.setTimeout = (fn) => realTimeout(fn, 0);   // 把重试的 500ms 压掉，测试不必真等
-const brokenRun = bootWith(() => Promise.reject(new Error("bridge down")));
-await new Promise((r) => realTimeout(r, 60));
-globalThis.setTimeout = realTimeout;
-const chartText = brokenRun.byId("chart").children.map((c) => c.textContent).join("");
-const skeletonGone = chartText.indexOf("取不到数据") >= 0 && brokenRun.byId("table").hidden === true;
-console.log((skeletonGone ? "  ok   " : "  FAIL ") + "首屏失败：骨架收掉并写明原因（" + chartText.slice(0, 24) + "）");
-if (!skeletonGone) bad++;
-
-/* ---- 极小的值也要看得见：2% 地板 ---- */
-const tiny = {
-  total_tokens: 1000001, patched: 4, recorded: 2, range_days: 30, generated_at: "00:00",
-  series: [
-    { day: "2026-10-15", calls: 1, total: 1000000 },
-    { day: "2026-10-16", calls: 1, total: 1 },        // 千分之一
-  ],
-  series_by_plugin: {
-    big: [{ day: "2026-10-15", calls: 1, total: 1000000 }, { day: "2026-10-16", calls: 1, total: 1 }],
-  },
-  plugins: [
-    { name: "big", total: 1000001, calls: 2, failed: 0, images: 0, cache_hit: "—",
-      input_other: 0, input_cached: 0, models: [] },
-  ],
+const sample = {
+  overview: { calls: 69, success: 67, failed: 1, canceled: 1, tokens: 259212, input_other: 145467, input_cached: 112505, output: 1240, reasoning: 240, cache_write: 50,
+    cache_hit_rate: 0.436, cache_share: 0.434, success_rate: 67 / 69, tps: 24, tps_samples: 4, rpm: 2, average_latency_ms: 1200, latency_samples: 4, estimated_cost: 0, priced_calls: 2, unpriced_calls: 3 },
+  timeline: [
+    { timestamp: 1792022400, label: "10-15", calls: 5, tokens: 40000, models: [{ key: "raw|R1", label: "R1", tokens: 30000 }, { key: "other", tokens: 10000 }], plugins: [{ key: "angel", tokens: 30000 }, { key: "main_agent", tokens: 10000 }] },
+    { timestamp: 1792108800, label: "10-16", calls: 64, tokens: 219212, models: [{ key: "raw|R1", label: "R1", tokens: 114038 }, { key: "other", tokens: 105174 }], plugins: [{ key: "angel", tokens: 114038 }, { key: "main_agent", tokens: 105174 }] }
+  ], granularity: "day",
+  analysis: { plugins: [{ key: "angel", label: "Angel", calls: 29, tokens: 144038, failed: 0 }, { key: "main_agent", calls: 40, tokens: 115174, failed: 1 }],
+    models: [{ key: "raw|R1", label: "R1", calls: 29, tokens: 144038, failed: 0 }], providers: [{ key: "openai", calls: 69, tokens: 259212, failed: 1 }] },
+  events: { items: [{ id: "a", timestamp: 1792022400, plugin: "angel", provider: "openai", model: "raw|R1", result: "success", input_other: 1, input_cached: 0, output: 240, reasoning: null, cache_write: 0, tokens: 241, latency_ms: 0, ttft_ms: null, tps: null, estimated_cost: 0 }], page: 1, page_size: 50, total: 70, total_pages: 2 },
+  options: { plugins: ["angel", "main_agent"], models: ["raw|R1", "other"], providers: ["openai"] },
+  prices: [{ model: "raw|R1", provider: "", input: null, cache_read: 0, cache_write: null, output: 2 }],
+  pricing: {total_cost:0,priced_calls:40,unpriced_calls:29,available_prices:85,updated_at:1792022400,source:"models.dev",rows:[
+    {model:"raw|R1",provider:"openai",calls:29,tokens:144038,estimated_cost:null,priced_calls:0,unpriced_calls:29,price:{input:null,cache_read:0,cache_write:null,output:2},price_source:"manual",source_provider:null},
+    {model:"other",provider:"openai",calls:40,tokens:115174,estimated_cost:0,priced_calls:40,unpriced_calls:0,price:{input:0,output:0,cache_read:0,cache_write:0},price_source:"models.dev",source_provider:"openai"},
+    {model:"catalog-unused",provider:"",calls:0,tokens:0,estimated_cost:0,priced_calls:0,unpriced_calls:0,price:{input:2,output:10,cache_read:.2,cache_write:2.5},price_source:"models.dev",source_provider:"vendor"}
+  ]},
+  coverage: { legacy_calls: 60, detail_calls: 9, excluded_legacy_calls: 0, detail_start: null, warnings: ["部分旧数据不含明细"] },
+  settings: { enabled: false, detail_history: true, keep_days: 13, detail_max_events: 37, writable: true, revision: 7, reload_required: false, runtime_error: "" },
+  collection: { detail_enabled: false, detail_available: true, detail_error: "", patched_count: 4, pending: 2, dropped: 1, wrapped_methods: ["LiveProvider.text_chat", "LiveProvider.text_chat_stream"] }
 };
-const tinyRun = bootWith(() => Promise.resolve(tiny));
-await new Promise((r) => setTimeout(r, 30));
-const tinyHeights = tinyRun.byId("chart").children[0].children.map((c) => parseFloat(c.children[0].style.height));
-const floorOk = tinyHeights[0] === 100 && tinyHeights[1] === 2;
-console.log((floorOk ? "  ok   " : "  FAIL ") + "千分之一的那天仍有 2% 高度 = " + tinyHeights.join(" / ") + "（应为 100 / 2）");
-if (!floorOk) bad++;
+const clone = value => structuredClone(value);
+function boot({ get, post, dark = true, alias = false } = {}) {
+  const registry = parse(), intervals = [], timers = [], gets = [], posts = [], downloads = [], store = new Map();
+  const byId = id => { assert.ok(registry.has(id), "unknown DOM id: " + id); return registry.get(id); };
+  const doc = { documentElement: node("html"), hidden: false, getElementById: byId, createElement: node, createElementNS: (_ns, tag) => node(tag), createTextNode: text => { const n = node("#text"); n.textContent = text; return n; } };
+  const bridge = { ready: async () => ({ isDark: dark }), apiGet: async (path, params) => { gets.push({ path, params: clone(params) }); return get ? get(path, params) : clone(sample); },
+    apiPost: async (path, body) => { posts.push({ path, body: clone(body) }); return post ? post(path, body) : { saved: true, baseline_plugins: 3, memory_calls: 7 }; } };
+  const win = { matchMedia: () => ({ matches: false, addEventListener() {} }), localStorage: { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, String(value)) }, [alias ? "AstrBotPluginView" : "AstrBotPluginPage"]: bridge };
+  const context = vm.createContext({ window: win, document: doc, Blob, URL: { createObjectURL: blob => { downloads.push(blob); return "blob:test"; }, revokeObjectURL() {} },
+    setInterval: fn => intervals.push(fn), setTimeout: (fn, delay) => { timers.push({ fn, delay }); if (delay <= 500) queueMicrotask(fn); return timers.length; }, clearTimeout: id => { if (timers[id - 1]) timers[id - 1].canceled = true; } });
+  vm.runInContext(helper, context); vm.runInContext(source, context);
+  return { byId, doc, gets, posts, downloads, intervals, timers, bridge, tab(name) { fire(byId("tabs"), "click", { target: byId("tab-" + name + "-btn") }); }, filter(key, value) { byId("filter-" + key).value = value; fire(byId("filter-" + key), "change"); } };
+}
+const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+const app = boot();
+assert.equal(app.byId("dashboard").getAttribute("aria-busy"), "true");
+assert.match(app.byId("status-text").textContent, /加载/);
+await flush();
+for (const [id, value] of [["kpi-calls", "69"], ["kpi-total", "259,212"], ["kpi-tps", "24"], ["kpi-cost", "$0"], ["kpi-cache", "43.6%"]]) assert.equal(app.byId(id).textContent, value);
+assert.match(app.byId("token-parts").textContent, /输出1,240/); // output survives all projections
+assert.match(app.byId("events-body").textContent, /240/);
+assert.equal(app.doc.documentElement.getAttribute("data-theme"), "dark");
+assert.equal(app.byId("dashboard").getAttribute("aria-busy"), "false");
+assert.equal(app.gets[0].path, "stats"); assert.equal(app.gets[0].params.view, "dashboard"); assert.equal(app.gets[0].params.days, 30);
+assert.equal(app.byId("range").value, "30");
+assert.equal(app.byId("group").children[1].getAttribute("aria-pressed"), "true");
+assert.equal(app.byId("legend").children.length, 2);
+const canvas = app.byId("chart").children[0], bars = canvas.children.filter(n => n.getAttribute("class") === "chart-bar");
+assert.equal(bars.filter(n => n.tabIndex === 0).length, 1);
+fire(canvas, "keydown", { target: bars[0], key: "ArrowRight" }); assert.equal(bars[0].tabIndex, -1); assert.equal(bars[1].tabIndex, 0);
+fire(canvas, "keydown", { target: bars[1], key: "End" }); assert.equal(bars.at(-1).tabIndex, 0);
+fire(canvas, "keydown", { target: bars.at(-1), key: "ArrowRight" }); assert.equal(bars.at(-1).tabIndex, 0);
+const peakRects = bars[1].children.filter(n => n.tagName === "rect" && n.getAttribute("height") !== "237");
+assert.ok(Math.abs(peakRects.reduce((sum, r) => sum + Number(r.getAttribute("height")), 0) - 237) < 1e-9);
+const beforeLegend = app.gets.length; fire(app.byId("legend").children[0], "click");
+assert.equal(app.gets.length, beforeLegend); assert.equal(app.byId("kpi-total").textContent, "259,212"); assert.equal(app.byId("legend").children[0].getAttribute("aria-pressed"), "false");
+fire(app.byId("sort-calls"), "click"); assert.equal(app.byId("tbody").children[0].children[0].textContent, "main_agent"); assert.equal(app.byId("th-calls").getAttribute("aria-sort"), "descending");
+fire(app.byId("sort-calls"), "click"); assert.equal(app.byId("tbody").children[0].children[0].textContent, "Angel"); assert.equal(app.byId("th-calls").getAttribute("aria-sort"), "ascending");
+fire(app.byId("tbody").children[0].children[0].children[0], "click"); await flush(); assert.equal(app.gets.at(-1).params.plugin, "angel");
+app.byId("analysis-group").value = "models"; fire(app.byId("analysis-group"), "change");
+fire(app.byId("tbody").children[0].children[0].children[0], "click"); await flush(); assert.equal(app.gets.at(-1).params.model, "raw|R1"); assert.equal(app.gets.at(-1).params.plugin, "angel");
+// Group switch affects chart and request query, but not numerical KPI definitions.
+fire(app.byId("group"), "click", { target: app.byId("group").children[0] }); await flush(); assert.equal(app.gets.at(-1).params.group, "model"); assert.match(app.byId("legend").textContent, /R1/);
+assert.equal(app.byId("kpi-total").textContent, "259,212");
+// Paging and unified filters reset the page for every view.
+fire(app.byId("page-next"), "click"); await flush(); assert.equal(app.gets.at(-1).params.page, 2);
+app.filter("provider", "openai"); await flush(); assert.equal(app.gets.at(-1).params.page, 1);
+app.filter("result", "canceled"); await flush(); assert.equal(app.gets.at(-1).params.result, "canceled");
+app.byId("page-size").value = "200"; fire(app.byId("page-size"), "change"); await flush(); assert.equal(app.gets.at(-1).params.page_size, 200);
+// Column visibility and width are usable without drag, and survive refresh.
+const controls = app.byId("event-columns").children;
+const outputControl = controls.find(c => c.children[0].textContent === "输出");
+outputControl.children[1].value = "222"; fire(outputControl.children[1], "change");
+let outputHeader = app.byId("events-head").children[0].children.find(c => c.textContent === "输出"); assert.equal(outputHeader.style.width, "222px");
+outputControl.children[0].children[0].checked = false; fire(outputControl.children[0].children[0], "change"); assert.ok(!app.byId("events-head").textContent.includes("输出"));
+fire(app.byId("refresh"), "click"); await flush(); assert.ok(!app.byId("events-head").textContent.includes("输出"));
+// Tabs expose selected state, roving focus and all six panels.
+fire(app.byId("tabs"), "keydown", { target: app.byId("tab-stats-btn"), key: "ArrowRight" });
+assert.equal(app.byId("tab-analysis-btn").getAttribute("aria-selected"), "true"); assert.equal(app.byId("tab-stats-btn").tabIndex, -1); assert.equal(app.byId("tab-analysis").hidden, false); assert.equal(app.byId("tab-analysis-btn").focused, true);
+fire(app.byId("tabs"), "keydown", { target: app.byId("tab-analysis-btn"), key: "End" }); assert.equal(app.byId("tab-manage").hidden, false);
+fire(app.byId("tabs"), "keydown", { target: app.byId("tab-manage-btn"), key: "Home" }); assert.equal(app.byId("tab-stats").hidden, false);
+// Custom local datetime inputs are serialized as timezone-qualified ISO, end excluded.
+app.byId("range").value="custom"; fire(app.byId("range"), "change"); await flush(); assert.equal(app.byId("custom-range").hidden,false);
+fire(app.byId("apply-range"),"click"); await flush(); assert.match(app.byId("status-text").textContent,/有效/);
+app.byId("start").value = "2026-10-15T10:30"; app.byId("end").value = "2026-10-15T12:00"; fire(app.byId("apply-range"), "click"); await flush();
+assert.equal(app.gets.at(-1).params.start, new Date("2026-10-15T10:30").toISOString()); assert.match(app.gets.at(-1).params.end, /Z$/); assert.equal(app.gets.at(-1).params.days, 0);
+app.byId("range").value="0"; fire(app.byId("range"), "change"); await flush(); assert.equal(app.gets.at(-1).params.days, 0); assert.equal(app.gets.at(-1).params.start, undefined);
+// Automatic refresh pauses for hidden documents and never polls logs.
+const beforeHidden = app.gets.length; app.doc.hidden = true; app.intervals[0](); await flush(); assert.equal(app.gets.length, beforeHidden);
+app.doc.hidden = false; app.intervals[0](); await flush(); assert.equal(app.gets.length, beforeHidden + 1);
+// Price statistics start as read-only rows; only explicit edits produce manual writes.
+app.tab("prices"); assert.equal(app.byId("price-editor").hidden,true); assert.doesNotMatch(app.byId("price-status").textContent,/未保存/);
+assert.equal(app.byId("price-total").textContent,"$0"); assert.ok(app.byId("price-summary").textContent.includes("40 / 69"));
+assert.equal(app.byId("prices-body").children.length,3);
+const beforeSearch = app.gets.length; app.byId("price-search").value="other"; fire(app.byId("price-search"),"input");
+assert.equal(app.byId("prices-body").children.length,1); assert.equal(app.gets.length,beforeSearch);
+app.byId("price-search").value=""; fire(app.byId("price-search"),"input");
+fire(app.byId("prices-body").children[0].children[8].children[0],"click");
+assert.equal(app.byId("price-editor").hidden,false); assert.equal(app.byId("price-edit-input").value,""); assert.equal(app.byId("price-edit-cache_read").value,"0");
+assert.doesNotMatch(app.byId("price-edit-status").textContent,/未保存/);
+const priceInput=app.byId("price-edit-input"); priceInput.value="-1"; fire(priceInput,"input"); fire(app.byId("price-save"),"click"); await flush();
+assert.equal(app.posts.length,0); assert.match(app.byId("price-edit-status").textContent,/价格/);
+fire(app.byId("refresh"),"click"); await flush(); assert.equal(app.byId("price-edit-input").value,"-1");
+priceInput.value=""; fire(priceInput,"input"); fire(app.byId("price-save"),"click"); await flush();
+assert.equal(app.posts.at(-1).path,"prices"); assert.equal(app.posts.at(-1).body.prices.length,1);
+assert.equal(app.posts.at(-1).body.prices[0].input,null); assert.equal(app.posts.at(-1).body.prices[0].cache_read,0); assert.equal(app.posts.at(-1).body.prices[0].model,"raw|R1");
+assert.match(app.byId("collection-status").textContent,/未启用/); assert.match(app.byId("coverage").textContent,/详细历史起点—/); assert.match(app.byId("coverage-warnings").textContent,/旧数据/);
+// Edits made while saving remain visible through both a save response and refresh.
+let savedPriceSample=clone(sample),finishPriceSave;
+const priceRace=boot({get:()=>clone(savedPriceSample),post:()=>new Promise(resolve=>{finishPriceSave=resolve;})}); await flush();
+fire(priceRace.byId("prices-body").children[0].children[8].children[0],"click");
+const racePriceInput=priceRace.byId("price-edit-input"); racePriceInput.value="4"; fire(racePriceInput,"input"); fire(priceRace.byId("price-save"),"click"); await flush();
+racePriceInput.value="5"; fire(racePriceInput,"input"); savedPriceSample.prices[0].input=4; finishPriceSave({saved:true}); await flush();
+fire(priceRace.byId("refresh"),"click"); await flush(); assert.equal(priceRace.byId("price-edit-input").value,"5");
+// Catalog rows stay read-only until edited; public sync never POSTs the catalog as manual rows.
+const beforeSync=app.posts.length; fire(app.byId("price-sync"),"click"); await flush();
+assert.equal(app.posts.at(-1).path,"price_sync"); assert.equal(app.posts.at(-1).body.source,"models.dev"); assert.equal(app.posts.length,beforeSync+1);
+assert.match(app.byId("price-status").textContent,/未确认|失败/); assert.equal(app.byId("price-sync").disabled,false);
+const synced=boot({post:async(path)=>path==="price_sync"?{synced:true,rows:85,updated_at:1792022400,source:"models.dev"}:{saved:true}}); await flush();
+fire(synced.byId("price-sync"),"click"); await flush(); assert.match(synced.byId("price-status").textContent,/已更新/);
+const offline=boot({post:async()=>{throw new Error("offline");}}); await flush(); fire(offline.byId("price-sync"),"click"); await flush(); assert.match(offline.byId("price-status").textContent,/更新失败/); assert.equal(offline.byId("price-sync").disabled,false);
+const noManualSample=clone(sample); noManualSample.prices=[]; noManualSample.pricing.rows[0].price=null; noManualSample.pricing.rows[0].price_source=null;
+const noManual=boot({get:()=>clone(noManualSample)}); await flush(); assert.match(noManual.byId("prices-body").textContent,/raw\|R1/); assert.doesNotMatch(noManual.byId("price-status").textContent,/未保存/);
+const legacyPriceSample=clone(noManualSample); delete legacyPriceSample.pricing;
+const legacyPrices=boot({get:()=>clone(legacyPriceSample)}); await flush(); assert.equal(legacyPrices.byId("price-compat").hidden,false); assert.match(legacyPrices.byId("prices-body").textContent,/raw\|R1/);
+const largePriceSample=clone(sample); largePriceSample.pricing.rows=Array.from({length:123},(_,i)=>({model:"catalog-"+i,provider:"",calls:0,tokens:0,estimated_cost:0,price:null,price_source:null}));
+const largePrices=boot({get:()=>clone(largePriceSample)}); await flush(); assert.equal(largePrices.byId("prices-body").children.length,50); fire(largePrices.byId("price-next"),"click"); assert.equal(largePrices.byId("prices-body").children.length,50); assert.match(largePrices.byId("price-page-note").textContent,/51-100/);
+// Manual add alone does not claim unsaved modifications; cancel does not POST.
+const beforeAdd=app.posts.length; fire(app.byId("price-add"),"click"); assert.doesNotMatch(app.byId("price-edit-status").textContent,/未保存/); fire(app.byId("price-cancel"),"click"); assert.equal(app.posts.length,beforeAdd);
 
-/* ---- 有命中数就不许显示「—」 ----
-   流式响应扒不到 raw_completion，cache_reported 会一路记成 0。命中率以前只看
-   这个标记，于是整列「—」，而旁边的「缓存」列明明有数字。 */
-const hitsNoFlag = {
-  total_tokens: 259212, patched: 4, recorded: 10, range_days: 30, generated_at: "00:00",
-  series: [{ day: "2026-10-15", calls: 10, total: 259212 }],
-  series_by_plugin: { p: [{ day: "2026-10-15", calls: 10, total: 259212 }] },
-  plugins: [
-    { name: "p", total: 259212, calls: 10, failed: 0, images: 0, cache_hit: "—",
-      input_other: 122432, input_cached: 136780, output: 0, cache_reported: 0,
-      models: [{ name: "m", total: 259212, calls: 10, failed: 0, images: 0,
-                 cache_hit: "—", input_other: 122432, input_cached: 136780,
-                 output: 0, cache_reported: 0 }] },
-  ],
-};
-const hitsRun = bootWith(() => Promise.resolve(hitsNoFlag));
-await new Promise((r) => setTimeout(r, 30));
-const hitsSub = hitsRun.byId("kpi-cached-sub").children.map((c) => c.textContent).join("");
-const hitsKpiOk = hitsSub.indexOf("未上报") < 0 && hitsSub.indexOf("命中 53%") >= 0;
-if (!hitsKpiOk) bad++;
-console.log((hitsKpiOk ? "  ok   " : "  FAIL ") + "有命中数时 KPI 算命中率 = " + JSON.stringify(hitsSub));
-// 按模型分组时父行的命中率是前端用原始计数重算的 —— 这条路径以前直接给「—」
-fire(hitsRun.byId("group"), "click", { target: { closest: () => ({ dataset: { group: "model" } }) } });
-const hitsCell = hitsRun.byId("tbody").children[0].children[3].textContent;
-const hitsCellOk = hitsCell === "53%";
-if (!hitsCellOk) bad++;
-console.log((hitsCellOk ? "  ok   " : "  FAIL ") + "按模型分组时的命中率 = " + JSON.stringify(hitsCell) + "（应为 53%）");
+// Editing a directory row creates one manual override, never imports the whole catalog.
+fire(app.byId("prices-body").children[1].children[8].children[0],"click"); fire(app.byId("price-save"),"click"); await flush();
+assert.equal(app.posts.at(-1).body.prices.length,2); assert.ok(app.posts.at(-1).body.prices.some(p=>p.model==="other")); assert.ok(!app.posts.at(-1).body.prices.some(p=>p.model==="catalog-unused"));
+// Removing the persisted override works even if the unsaved draft is invalid, and restores catalog display.
+const restoredSample=clone(sample);
+const restore=boot({get:()=>clone(restoredSample),post:async(path,body)=>{ if(path==="prices") {restoredSample.prices=clone(body.prices);restoredSample.pricing.rows[0].price_source="models.dev";restoredSample.pricing.rows[0].price={input:1,output:2,cache_read:.1,cache_write:null};} return {saved:true}; }}); await flush();
+fire(restore.byId("prices-body").children[0].children[8].children[0],"click"); restore.byId("price-edit-input").value="-9"; fire(restore.byId("price-edit-input"),"input"); fire(restore.byId("price-remove"),"click"); await flush();
+assert.equal(restore.posts.at(-1).body.prices.length,0); assert.match(restore.byId("prices-body").children[0].textContent,/Models.dev/); assert.equal(restore.byId("price-editor").hidden,true);
+// Public refresh preserves an active manual draft and only writes the sync endpoint.
+const draftSync=boot({post:async()=>({synced:true,rows:85,updated_at:1792022400,source:"models.dev"})}); await flush();
+fire(draftSync.byId("prices-body").children[0].children[8].children[0],"click"); draftSync.byId("price-edit-input").value="7"; fire(draftSync.byId("price-edit-input"),"input"); fire(draftSync.byId("price-sync"),"click"); await flush();
+assert.equal(draftSync.byId("price-edit-input").value,"7"); assert.equal(draftSync.byId("price-editor").hidden,false); assert.ok(draftSync.posts.every(p=>p.path==="price_sync"));
+const partialReset=boot({post:async()=>({saved:false,note:"disk full"})}); await flush(); partialReset.tab("manage"); fire(partialReset.byId("reset-stats"),"click"); fire(partialReset.byId("reset-stats"),"click"); await flush(); assert.match(partialReset.byId("reset-status").textContent,/重置失败/); assert.doesNotMatch(partialReset.byId("reset-status").textContent,/已重置/);
+// Destructive reset: first click arms only, cancel/Escape/expiry never POST.
+app.tab("manage"); const countBeforeReset = app.posts.length;
+fire(app.byId("reset-stats"), "click"); assert.equal(app.posts.length, countBeforeReset); assert.equal(app.byId("reset-stats").textContent, "再点一次确认");
+fire(app.byId("reset-cancel"), "click"); assert.equal(app.byId("reset-stats").textContent, "重置");
+fire(app.byId("reset-stats"), "click"); fire(app.byId("reset-stats"), "keydown", { key: "Escape" }); assert.equal(app.posts.length, countBeforeReset);
+fire(app.byId("reset-stats"), "click"); app.timers.filter(t => t.delay === 5000 && !t.canceled).at(-1).fn(); assert.equal(app.byId("reset-stats").textContent, "重置");
+fire(app.byId("reset-stats"), "click"); fire(app.byId("reset-stats"), "click"); await flush(); assert.equal(app.posts.at(-1).path, "reset"); assert.equal(app.posts.length, countBeforeReset + 1); assert.equal(app.byId("reset-stats").textContent, "重置");
+assert.equal(app.gets.at(-1).params.view, "dashboard");
+// Empty/race/error protections: no stale rows resurrect on sort, latest request wins.
+const emptySample = clone(sample); emptySample.analysis.plugins = []; emptySample.timeline = [];
+const empty = boot({ get: () => emptySample }); await flush(); assert.equal(empty.byId("table").hidden, true); assert.equal(empty.byId("empty").hidden, false); fire(empty.byId("sort-calls"), "click"); assert.equal(empty.byId("tbody").children.length, 0);
+const pending = []; const race = boot({ get: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) }); await flush();
+fire(race.byId("refresh"), "click"); await flush(); assert.equal(pending.length, 2); assert.match(race.byId("status-text").textContent, /加载/);
+const newer = clone(sample); newer.overview.tokens = 111111; pending[1].resolve(newer); await flush(); pending[0].resolve(sample); await flush(); assert.equal(race.byId("kpi-total").textContent, "111,111");
+const broken = boot({ get: () => Promise.reject(new Error("bridge down")), alias: true }); await flush(); assert.match(broken.byId("chart").textContent, /取不到数据/); assert.equal(broken.byId("table").hidden, true); assert.match(broken.byId("status-text").textContent, /读取失败/);
+const unknownSample = clone(sample); Object.assign(unknownSample.overview, { tps: null, success_rate: null, cache_hit_rate: null, estimated_cost: null });
+const unknown = boot({ get: () => unknownSample, dark: false }); await flush(); for (const id of ["kpi-tps", "kpi-success", "kpi-cache", "kpi-cost"]) assert.equal(unknown.byId(id).textContent, "—"); assert.equal(unknown.doc.documentElement.getAttribute("data-theme"), "light");
+const zeroSample = clone(sample); Object.assign(zeroSample.overview, { tps: 0, success_rate: 0, cache_hit_rate: 0, estimated_cost: 0 }); const zero = boot({ get: () => zeroSample }); await flush(); assert.equal(zero.byId("kpi-tps").textContent, "0"); assert.equal(zero.byId("kpi-cache").textContent, "0%");
+// Missing selected options stay explicit, never silently clear an active scope.
+const absentSample = clone(sample); absentSample.options.models = []; const absent = boot({ get: () => absentSample }); await flush(); absent.filter("model", "raw|R1"); await flush(); assert.equal(absent.byId("filter-model").value, "raw|R1"); assert.match(absent.byId("filter-model").textContent, /当前时间范围无记录/);
+// Tiny bars retain actual proportional height, and zero bars have no painted segment.
+const tinySample = clone(sample); tinySample.timeline = [{ label: "big", tokens: 1000000, plugins: [{ key: "p", tokens: 1000000 }] }, { label: "tiny", tokens: 1, plugins: [{ key: "p", tokens: 1 }] }, { label: "zero", tokens: 0, plugins: [] }];
+const tiny = boot({ get: () => tinySample }); await flush(); const tinyBars = tiny.byId("chart").children[0].children.filter(n => n.getAttribute("class") === "chart-bar");
+assert.equal(Number(tinyBars[0].children[1].getAttribute("height")), 237); assert.equal(Number(tinyBars[1].children[1].getAttribute("height")), 0.000237); assert.equal(tinyBars[2].children.length, 2);
+// Export uses stats with identical global filters and discloses bounded/truncated history.
+const exporter = boot({ get: (_path, q) => q.view === "export" ? { csv: "model,tokens\nraw,1\n", returned: 5000, total: 6000, truncated: true } : clone(sample) }); await flush(); exporter.filter("model", "raw|R1"); await flush(); fire(exporter.byId("export-events"), "click"); await flush();
+assert.equal(exporter.gets.at(-1).path, "stats"); assert.equal(exporter.gets.at(-1).params.view, "export"); assert.equal(exporter.gets.at(-1).params.model, "raw|R1"); assert.equal(exporter.downloads.length, 1); assert.match(exporter.byId("export-status").textContent, /已截断/); assert.match(exporter.byId("export-status").textContent, /不含旧汇总/);
+const exportPending = []; const exportRace = boot({ get: (_path, q) => q.view === "export" ? new Promise(resolve => exportPending.push(resolve)) : clone(sample) }); await flush(); fire(exportRace.byId("export-events"), "click"); await flush(); exportRace.filter("model", "other"); await flush(); exportPending[0]({ csv: "stale", returned: 1, total: 1 }); await flush(); assert.equal(exportRace.downloads.length, 0);
+// Bounded log states/privacy and input-token order are preserved, with independent generation guards.
+const log = boot({ get: (_path, q) => q.tail ? { enabled: true, state: "truncated", returned: 4, truncated: true, lines: ["in=1", "in=4"] } : clone(sample) }); await flush(); log.tab("log"); await flush();
+assert.equal(log.gets.at(-1).path, "stats"); assert.equal(log.gets.at(-1).params.tail, 200); assert.equal(Object.keys(log.gets.at(-1).params).length, 1); assert.equal(log.byId("log-body").textContent, "in=4\nin=1"); assert.match(log.byId("log-status").textContent, /最近 4 条/); assert.equal(log.byId("log-export").disabled, false); assert.equal(log.byId("log-refresh").disabled, false);
+const beforeLogInterval = log.gets.length; log.intervals[0](); await flush(); assert.equal(log.gets.length, beforeLogInterval);
+fire(log.byId("log-export"), "click"); assert.equal(log.downloads.length, 1);
+const logPending = []; const logRace = boot({ get: (_path, q) => q.tail ? new Promise(resolve => logPending.push(resolve)) : clone(sample) }); await flush(); logRace.tab("log");
+fire(logRace.byId("log-size"), "click", { target: logRace.byId("log-size").children[2] }); assert.equal(logRace.gets.at(-1).params.tail, 5000);
+logPending[1]({ state: "ready", returned: 1, lines: ["newest"] }); await flush(); logPending[0]({ state: "ready", returned: 1, lines: ["stale"] }); await flush(); assert.equal(logRace.byId("log-body").textContent, "newest");
+for (const [state, text] of [["disabled", "未启用"], ["empty", "暂无"], ["unavailable", "无法读取"], ["invalid_request", "无效"], ["partial", "尚未写入"]]) {
+  const run = boot({ get: (_path, q) => q.tail ? { state, returned: 0, lines: [], error_code: "read_failed" } : clone(sample) }); await flush(); run.tab("log"); await flush(); assert.match(run.byId("log-status").textContent, new RegExp(text)); assert.equal(run.byId("log-export").disabled, true);
+}
+const logFail = boot({ get: (_path, q) => q.tail ? Promise.reject(new Error("bad")) : clone(sample) }); await flush(); logFail.tab("log"); await flush(); assert.match(logFail.byId("log-status").textContent, /读取失败/); assert.equal(logFail.byId("log-refresh").disabled, false);
+const injection = clone(sample); injection.analysis.plugins[0].label = '<img src=x onerror="boom">'; injection.coverage.warnings = ['<script>boom</script>']; const safe = boot({ get: () => injection }); await flush(); assert.match(safe.byId("tbody").textContent, /<img/); assert.equal(safe.byId("tbody").children[0].children[0].children[0].children.length, 0);
+console.log("View smoke: six tabs, unified filters, chart/keyboard/arithmetic, sorting, details/columns/pagination, prices, coverage, export, themes, reset safeguards and bounded-log regressions passed.");
 
-/* 反向：命中数 0 且没人上报 → 仍是「未上报」，别把这条老规矩改没了 */
-const noHits = Object.assign({}, hitsNoFlag, {
-  plugins: [{ name: "p", total: 122432, calls: 10, failed: 0, images: 0, cache_hit: "—",
-              input_other: 122432, input_cached: 0, output: 0, cache_reported: 0, models: [] }],
-});
-const noHitsRun = bootWith(() => Promise.resolve(noHits));
-await new Promise((r) => setTimeout(r, 30));
-const noHitsSub = noHitsRun.byId("kpi-cached-sub").children.map((c) => c.textContent).join("");
-const noHitsOk = noHitsSub.indexOf("未上报") >= 0;
-if (!noHitsOk) bad++;
-console.log((noHitsOk ? "  ok   " : "  FAIL ") + "没人上报缓存时仍是「未上报」= " + JSON.stringify(noHitsSub));
+// Feed an actual HTTP query response into the UI renderer when a synthetic fixture is supplied.
+if (process.env.ASTRBOT_USAGE_FIXTURE) {
+  const actual = JSON.parse(fs.readFileSync(process.env.ASTRBOT_USAGE_FIXTURE, "utf8"));
+  const live = boot({ get: () => clone(actual) }); await flush(); live.tab("prices"); await flush();
+  assert.equal(live.byId("price-compat").hidden, true);
+  assert.equal(live.byId("prices-body").children.length, Math.min(50, actual.pricing.rows.length));
+  const first = actual.pricing.rows[0], displayed = live.byId("prices-body").children[0];
+  assert.match(displayed.children[0].textContent, new RegExp(first.model.replace(/[.*+?^${}()|[]\]/g, "\$&")));
+  assert.equal(displayed.children[1].textContent, first.calls.toLocaleString("en-US"));
+  assert.equal(live.byId("price-total").textContent, "$" + actual.pricing.total_cost.toLocaleString("en-US", { maximumFractionDigits: 6 }));
+  assert.match(live.byId("status-text").textContent, /采集中/);
+  assert.doesNotMatch(live.byId("price-status").textContent, /未保存/);
+  console.log("Actual HTTP dashboard-to-UI pricing projection passed.");
+}
+const pausedSample=clone(sample); pausedSample.collection.plugin_enabled=false;
+const paused=boot({get:()=>clone(pausedSample)}); await flush(); assert.match(paused.byId("status-text").textContent,/采集未启用/);
+const waitingSample=clone(sample); waitingSample.collection.plugin_enabled=true; waitingSample.collection.patched_count=0;
+const waiting=boot({get:()=>clone(waitingSample)}); await flush(); assert.match(waiting.byId("status-text").textContent,/等待采集就绪/);
 
-/* ---- 重置：两步确认，且第二次点击必须真的发 POST ----
-   以前这里用 window.confirm，而插件页跑在 iframe 里，浏览器会直接拦掉模态框
-   并返回 false —— 点了什么都不会发生。所以确认只能做在按钮自己身上。 */
-const resetBtn = byId("reset-stats");
-posted.length = 0;
-fire(resetBtn, "click");
-const armedOk = posted.length === 0 && resetBtn.textContent === "再点一次确认";
-if (!armedOk) bad++;
-console.log((armedOk ? "  ok   " : "  FAIL ")
-  + "第一次点重置只进入待确认（POST 发了 " + posted.length + " 次，文字「" + resetBtn.textContent + "」）");
-fire(resetBtn, "click");
-await new Promise((r) => setTimeout(r, 20));
-const postOk = posted.length === 1 && posted[0].path === "reset";
-if (!postOk) bad++;
-console.log((postOk ? "  ok   " : "  FAIL ") + "第二次点重置发出 " + JSON.stringify(posted.map((p) => p.path)));
-const backOk = resetBtn.textContent === "重置" && !resetBtn.className.includes("armed");
-if (!backOk) bad++;
-console.log((backOk ? "  ok   " : "  FAIL ") + "重置后按钮复原为「" + resetBtn.textContent + "」");
-// 重置之后要重新取数：此刻 state.data 还是旧的，不重取图表不会变
-const reloadOk = lastParams !== null;
-if (!reloadOk) bad++;
-console.log((reloadOk ? "  ok   " : "  FAIL ") + "重置后重新取数（最后参数 " + JSON.stringify(lastParams) + "）");
+// Collection settings display actual values and remain scoped to their own endpoint.
+const settingsControls = boot(); await flush(); settingsControls.tab("manage");
+assert.equal(settingsControls.byId("settings-enabled").checked, false);
+assert.equal(settingsControls.byId("settings-detail-history").checked, true);
+assert.equal(settingsControls.byId("settings-keep-days").value, "13");
+assert.equal(settingsControls.byId("settings-max-events").value, "37");
+assert.match(settingsControls.byId("settings-detail-hint").textContent, /启用用量采集/);
+assert.equal(settingsControls.byId("runtime-diagnostics").hasAttribute("open"), false);
+assert.match(settingsControls.byId("wrapped-methods").textContent, /LiveProvider.text_chat/);
+assert.doesNotMatch(settingsControls.byId("coverage").textContent, /Provider.*补丁|包装方法数|等待写入|队列/);
+assert.doesNotMatch(settingsControls.byId("status").getAttribute("title"), /Provider|补丁|包装|计数/);
 
-console.log(bad === 0 ? "\n视图冒烟测试全部通过" : "\n有 " + bad + " 项没过");
-process.exit(bad === 0 ? 0 : 1);
+function settingsType(app, id, value) { app.byId(id).value = String(value); fire(app.byId(id), "input"); }
+function settingsToggle(app, id, value) { app.byId(id).checked = value; fire(app.byId(id), "change"); }
+function settingsAck(server, body, applied = true, reload = false) {
+  server.settings = { ...server.settings, ...clone(body.settings), revision: server.settings.revision + 1, reload_required: reload };
+  return { saved: true, applied, reload_required: reload, settings: clone(server.settings) };
+}
+
+// Missing or unwritable configuration never falls back to a pretend in-memory save.
+const noSettingsData = clone(sample); delete noSettingsData.settings;
+const noSettingsUI = boot({ get: () => clone(noSettingsData) }); await flush();
+assert.equal(noSettingsUI.byId("settings-save").disabled, true); assert.equal(noSettingsUI.byId("settings-keep-days").disabled, true);
+assert.match(noSettingsUI.byId("settings-runtime").textContent, /后端.*更新/);
+fire(noSettingsUI.byId("settings-save"), "click"); await flush(); assert.equal(noSettingsUI.posts.length, 0);
+const lockedSettingsData = clone(sample); Object.assign(lockedSettingsData.settings, { enabled: true, keep_days: 0, detail_max_events: 1, writable: false });
+const lockedSettingsUI = boot({ get: () => clone(lockedSettingsData) }); await flush();
+assert.equal(lockedSettingsUI.byId("settings-enabled").checked, true); assert.equal(lockedSettingsUI.byId("settings-keep-days").value, "0");
+assert.equal(lockedSettingsUI.byId("settings-max-events").value, "1"); assert.match(lockedSettingsUI.byId("settings-runtime").textContent, /没有配置持久化接口/);
+fire(lockedSettingsUI.byId("settings-save"), "click"); await flush(); assert.equal(lockedSettingsUI.posts.length, 0);
+
+// A save contains exactly the four editable fields and the draft's original revision.
+const settingsServer = clone(sample);
+const editableSettingsUI = boot({ get: () => clone(settingsServer), post: async (path, body) => {
+  assert.equal(path, "settings"); return settingsAck(settingsServer, body);
+} }); await flush();
+settingsType(editableSettingsUI, "settings-keep-days", 17);
+fire(editableSettingsUI.byId("settings-save"), "click"); await flush();
+const settingsBody = editableSettingsUI.posts[0].body;
+assert.deepEqual(Object.keys(settingsBody).sort(), ["revision", "settings"]);
+assert.deepEqual(Object.keys(settingsBody.settings).sort(), ["detail_history", "detail_max_events", "enabled", "keep_days"]);
+assert.deepEqual(settingsBody, { settings: { enabled: false, detail_history: true, keep_days: 17, detail_max_events: 37 }, revision: 7 });
+assert.equal(editableSettingsUI.byId("settings-enabled").checked, false);
+assert.match(editableSettingsUI.byId("settings-status").textContent, /已保存并生效/);
+assert.equal(editableSettingsUI.byId("settings-save").disabled, true);
+
+// Client range validation rejects blanks, negatives, fractions, and out-of-range values before POST.
+const invalidSettingsUI = boot(); await flush();
+for (const value of ["", "-1", "3651", "1.5", "1e1"]) {
+  settingsType(invalidSettingsUI, "settings-keep-days", value); fire(invalidSettingsUI.byId("settings-save"), "click"); await flush();
+  assert.equal(invalidSettingsUI.posts.length, 0); assert.match(invalidSettingsUI.byId("settings-status").textContent, /保留天数/);
+}
+settingsType(invalidSettingsUI, "settings-keep-days", 0);
+for (const value of ["", "0", "200001", "1.5"]) {
+  settingsType(invalidSettingsUI, "settings-max-events", value); fire(invalidSettingsUI.byId("settings-save"), "click"); await flush();
+  assert.equal(invalidSettingsUI.posts.length, 0); assert.match(invalidSettingsUI.byId("settings-status").textContent, /明细数量上限/);
+}
+
+// Background loads preserve dirty drafts and do not silently rebase a conflicting revision.
+const conflictSettingsData = clone(sample);
+const conflictSettingsUI = boot({ get: () => clone(conflictSettingsData), post: async () => { throw new Error("revision 冲突，请读取服务器值"); } }); await flush();
+settingsType(conflictSettingsUI, "settings-keep-days", 18);
+Object.assign(conflictSettingsData.settings, { keep_days: 42, revision: 8 });
+fire(conflictSettingsUI.byId("refresh"), "click"); await flush(); assert.equal(conflictSettingsUI.byId("settings-keep-days").value, "18");
+fire(conflictSettingsUI.byId("settings-save"), "click"); await flush();
+assert.equal(conflictSettingsUI.posts[0].body.revision, 7); assert.equal(conflictSettingsUI.byId("settings-keep-days").value, "18");
+assert.match(conflictSettingsUI.byId("settings-status").textContent, /草稿已保留/);
+Object.assign(conflictSettingsData.settings, { keep_days: 43, revision: 9 });
+fire(conflictSettingsUI.byId("settings-revert"), "click"); await flush();
+assert.equal(conflictSettingsUI.byId("settings-keep-days").value, "43"); assert.match(conflictSettingsUI.byId("settings-status").textContent, /已还原服务器设置/);
+settingsType(conflictSettingsUI, "settings-keep-days", 44); fire(conflictSettingsUI.byId("settings-save"), "click"); await flush();
+assert.equal(conflictSettingsUI.posts.at(-1).body.revision, 9);
+
+// Confirmed persistence is distinct from successful live application.
+const reloadSettingsData = clone(sample);
+const reloadSettingsUI = boot({ get: () => clone(reloadSettingsData), post: async (_path, body) => settingsAck(reloadSettingsData, body, false, true) }); await flush();
+settingsToggle(reloadSettingsUI, "settings-enabled", true); fire(reloadSettingsUI.byId("settings-save"), "click"); await flush();
+assert.match(reloadSettingsUI.byId("settings-status").textContent, /已保存，需要重载插件生效/);
+assert.doesNotMatch(reloadSettingsUI.byId("settings-status").textContent, /已保存并生效/);
+for (const reply of [{}, { saved: false }, { saved: true, applied: true, reload_required: false }]) {
+  const unconfirmed = boot({ post: async () => clone(reply) }); await flush(); settingsType(unconfirmed, "settings-keep-days", 22);
+  fire(unconfirmed.byId("settings-save"), "click"); await flush();
+  assert.equal(unconfirmed.byId("settings-keep-days").value, "22"); assert.match(unconfirmed.byId("settings-status").textContent, /未能确认保存/);
+  assert.doesNotMatch(unconfirmed.byId("settings-status").textContent, /^已保存|已保存并生效/);
+}
+
+// An edit made during a save survives the receipt and rebases to that acknowledged revision.
+const inFlightSettingsData = clone(sample), settingsResolvers = [];
+const inFlightSettingsUI = boot({ get: () => clone(inFlightSettingsData), post: (_path, body) => new Promise(resolve => settingsResolvers.push({ resolve, body })) }); await flush();
+settingsType(inFlightSettingsUI, "settings-keep-days", 30); fire(inFlightSettingsUI.byId("settings-save"), "click"); await flush();
+assert.equal(inFlightSettingsUI.byId("settings-keep-days").disabled, false);
+settingsType(inFlightSettingsUI, "settings-keep-days", 31); fire(inFlightSettingsUI.byId("refresh"), "click"); await flush();
+assert.equal(inFlightSettingsUI.byId("settings-keep-days").value, "31");
+settingsResolvers[0].resolve(settingsAck(inFlightSettingsData, settingsResolvers[0].body)); await flush();
+assert.equal(inFlightSettingsUI.byId("settings-keep-days").value, "31"); assert.match(inFlightSettingsUI.byId("settings-status").textContent, /草稿仍有未保存/);
+fire(inFlightSettingsUI.byId("settings-save"), "click"); await flush(); assert.equal(inFlightSettingsUI.posts[1].body.revision, 8);
+settingsResolvers[1].resolve(settingsAck(inFlightSettingsData, settingsResolvers[1].body)); await flush();
+assert.equal(inFlightSettingsUI.byId("settings-keep-days").value, "31"); assert.equal(inFlightSettingsUI.byId("settings-save").disabled, true);
+
+// A directory sync's subsequent dashboard refresh cannot replace an edited settings draft.
+const syncSettingsData = clone(sample), syncSettingsResolvers = [];
+const syncSettingsUI = boot({ get: () => clone(syncSettingsData), post: () => new Promise(resolve => syncSettingsResolvers.push(resolve)) }); await flush();
+syncSettingsUI.tab("prices"); fire(syncSettingsUI.byId("price-sync"), "click"); await flush(); syncSettingsUI.tab("manage");
+settingsType(syncSettingsUI, "settings-keep-days", 25); Object.assign(syncSettingsData.settings, { keep_days: 99, revision: 8 });
+syncSettingsResolvers[0]({ synced: true, rows: 85, source: "models.dev", updated_at: 1792022401 }); await flush();
+assert.equal(syncSettingsUI.byId("settings-keep-days").value, "25");
+const omittedMethodsData = clone(sample); delete omittedMethodsData.collection.wrapped_methods;
+const omittedMethodsUI = boot({ get: () => clone(omittedMethodsData) }); await flush(); assert.match(omittedMethodsUI.byId("wrapped-methods").textContent, /未返回/);
+console.log("Editable collection settings: actual values, range guards, persistence receipts, dirty/conflict/in-flight protection and closed runtime diagnostics passed.");
+
+// A dashboard GET begun before a settings save must not restore the older revision afterward.
+const staleSettingsData=clone(sample), staleSettingsQueue=[]; let staleSettingsReads=0;
+const staleSettingsUI=boot({get:()=>{staleSettingsReads++; if(staleSettingsReads===2)return new Promise(resolve=>staleSettingsQueue.push(resolve)); return clone(staleSettingsData);},post:async(_path,body)=>settingsAck(staleSettingsData,body)}); await flush();
+settingsType(staleSettingsUI,"settings-keep-days",28); fire(staleSettingsUI.byId("refresh"),"click"); await flush();
+const staleSettingsResponse=clone(staleSettingsData); fire(staleSettingsUI.byId("settings-save"),"click"); await flush();
+staleSettingsQueue[0](staleSettingsResponse); await flush(); assert.equal(staleSettingsUI.byId("settings-keep-days").value,"28");
+settingsType(staleSettingsUI,"settings-keep-days",29); fire(staleSettingsUI.byId("settings-save"),"click"); await flush(); assert.equal(staleSettingsUI.posts.at(-1).body.revision,8);
+
+// Revert is an explicit fresh read, and an edit made during that read remains a draft.
+const revertingData=clone(sample), revertingQueue=[]; let revertingReads=0;
+const revertingUI=boot({get:()=>{revertingReads++; if(revertingReads===2)return new Promise(resolve=>revertingQueue.push(resolve)); return clone(revertingData);}}); await flush();
+settingsType(revertingUI,"settings-keep-days",20); fire(revertingUI.byId("settings-revert"),"click"); await flush();
+settingsType(revertingUI,"settings-keep-days",21); Object.assign(revertingData.settings,{keep_days:77,revision:8}); revertingQueue[0](clone(revertingData)); await flush();
+assert.equal(revertingUI.byId("settings-keep-days").value,"21"); assert.match(revertingUI.byId("settings-status").textContent,/草稿仍保留/);
+fire(revertingUI.byId("settings-revert"),"click"); await flush(); assert.equal(revertingUI.byId("settings-keep-days").value,"77");
+
+// Existing out-of-range integers are shown as-is so users can correct them, never replaced by defaults.
+const legacyLimitsData=clone(sample); Object.assign(legacyLimitsData.settings,{keep_days:7300,detail_max_events:250000});
+const legacyLimitsUI=boot({get:()=>clone(legacyLimitsData),post:async(_path,body)=>settingsAck(legacyLimitsData,body)}); await flush();
+assert.equal(legacyLimitsUI.byId("settings-keep-days").value,"7300"); assert.equal(legacyLimitsUI.byId("settings-max-events").value,"250000");
+assert.match(legacyLimitsUI.byId("settings-runtime").textContent,/超出编辑范围/); assert.equal(legacyLimitsUI.byId("settings-keep-days").disabled,false);
+settingsType(legacyLimitsUI,"settings-keep-days",3650); settingsType(legacyLimitsUI,"settings-max-events",200000); fire(legacyLimitsUI.byId("settings-save"),"click"); await flush();
+assert.equal(legacyLimitsUI.posts.length,1); assert.equal(legacyLimitsUI.posts[0].body.settings.keep_days,3650);
+const malformedMethodsData=clone(sample); malformedMethodsData.collection.wrapped_methods=[null,42,{}];
+const malformedMethodsUI=boot({get:()=>clone(malformedMethodsData)}); await flush(); assert.match(malformedMethodsUI.byId("wrapped-methods").textContent,/未返回有效/);
+console.log("Settings stale-response, restore-edit, legacy-value and exact-method boundaries passed.");

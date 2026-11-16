@@ -440,8 +440,72 @@ def test_session_from_locals() -> None:
     assert session_from_locals([{"e": _ExplodingEvent()}]) == NO_SESSION
 
 
+def test_usage_extensions_preserve_positions_and_total() -> None:
+    from uuid import UUID
+
+    usage = Usage(10, 20, 30, 1, reasoning=7, cache_write=9, usage_reported=1)
+    assert usage.total == 60 and usage.cache_reported == 1
+    assert (usage + Usage()).reasoning == 7
+    assert (Usage() + Usage()).reasoning is None
+    assert (usage + usage).cache_write == 18
+    assert (usage + usage).usage_reported == 2
+    call = Call("p", "provider", "m", DAY)
+    assert str(UUID(call.event_id)) == call.event_id
+    assert call.event_id == call.event_id and call.event_id != Call("p", "q", "m", DAY).event_id
+    assert call.result == "" and call.ttft_ms is None
+    bucket = Bucket(usage=usage).to_dict()
+    assert bucket["cache_reported"] == 1 and bucket["reasoning"] == 7
+    assert bucket["cache_write"] == 9 and bucket["usage_reported"] == 1
+    assert bucket["total"] == 60
+
+
+def test_usage_extensions_only_use_proven_raw_fields() -> None:
+    token = SimpleNamespace(input_other=10, input_cached=0, output=20)
+    response = SimpleNamespace(raw_completion={"usage": {
+        "completion_tokens_details": {"reasoning_tokens": 0},
+        "cache_creation_input_tokens": 4,
+        "prompt_tokens_details": {"cached_tokens": 0},
+    }})
+    usage = usage_from(token, response)
+    assert usage.reasoning == 0 and usage.cache_write == 4
+    assert usage.usage_reported == 1 and usage.cache_reported == 1
+    assert usage.total == 30
+    missing = usage_from(token)
+    assert missing.reasoning is None and missing.cache_write is None
+    assert missing.usage_reported == 1
+    assert usage_from(None).usage_reported == 0
+    unsupported = SimpleNamespace(raw_completion={"usage": {"total_tokens": 30}})
+    assert usage_from(None, unsupported).reasoning is None
+
+
+def test_raw_usage_detail_variants_preserve_unknowns() -> None:
+    cases = [
+        ({"usage": {"completion_tokens_details": {"reasoning_tokens": 8}}}, 8, None),
+        ({"usage": {"output_tokens_details": {"reasoning_tokens": 0}}}, 0, None),
+        ({"usage": {"reasoning_tokens": 3, "cache_write_tokens": 4}}, 3, 4),
+        ({"usage_metadata": {"thoughts_token_count": 6}}, 6, None),
+        ({"usageMetadata": {"thoughtsTokenCount": 7}}, 7, None),
+        ({"usage": {"prompt_tokens_details": {"cache_write_tokens": 0}}}, None, 0),
+        ({"usage": {"reasoning_tokens": -1, "cache_creation_input_tokens": True}}, None, None),
+        ({"usage": {"output_tokens": 90, "prompt_cache_miss_tokens": 10}}, None, None),
+    ]
+    for completion, reasoning, cache_write in cases:
+        usage = usage_from(None, SimpleNamespace(raw_completion=completion))
+        assert usage.reasoning == reasoning and usage.cache_write == cache_write
+        assert usage.total == 0 and usage.usage_reported == 0
+    response = SimpleNamespace(raw_completion=SimpleNamespace(usage=SimpleNamespace(
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=2),
+        cache_creation_input_tokens=3,
+    )))
+    assert usage_from(None, response).reasoning == 2
+    assert usage_from(None, response).cache_write == 3
+
+
 def main() -> None:
     cases = [
+        test_raw_usage_detail_variants_preserve_unknowns,
+        test_usage_extensions_preserve_positions_and_total,
+        test_usage_extensions_only_use_proven_raw_fields,
         test_usage_add_and_total,
         test_cache_hit_rate,
         test_cache_hit_text_no_denominator,
