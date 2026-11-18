@@ -8,7 +8,7 @@
 
 运行插件需要 AstrBot。统计、存储、解析和装配桩测试可脱离宿主执行，不需要为了跑它们启动真实机器人。前端测试使用 Node.js，建议使用当前 LTS；项目没有声明独立的最小 Node 版本。
 
-[运行依赖](<../requirements.txt>)只列宿主要求；可选开发工具见[开发依赖](<../requirements-dev.txt>)，Ruff 配置见 [ruff.toml](<../ruff.toml>)，pytest 发现路径见 [pytest.ini](<../pytest.ini>)。
+[运行依赖](<../requirements.txt>)中的说明适用于插件运行；可选开发工具见[开发依赖](<../requirements-dev.txt>)，Ruff 配置见 [ruff.toml](<../ruff.toml>)，pytest 发现路径见 [pytest.ini](<../pytest.ini>)。
 
 ## 运行测试
 
@@ -69,18 +69,20 @@ python -B tools/preview_server.py --port 8766
 
 ## 构建安装包
 
-[构建工具](<../tools/build_package.py>)使用明确的文件白名单，先检查版本、许可与 Python 语法，再写入包并校验 CRC。
+[构建工具](<../tools/build_package.py>)使用安装文件白名单，先检查版本、许可与 Python 语法，再写入包并校验 CRC。安装包包含运行源码、用户文档与许可，不包含测试、开发工具和历史归档。
 
 ~~~bash
 python -B tools/build_package.py
 ~~~
 
-产物写到 _dist，文件名带元数据版本。同名文件已经存在时会报错，不自动覆盖。构建新版本前先确认版本及目标产物，不能为了绕过检查覆盖用户保留的包。
+产物写到 _dist，文件名为 astrbot_plugin_usage_stats-v版本-install.zip。同名文件已经存在时会报错，不自动覆盖。构建新版本前先确认版本及目标产物，不能为了绕过检查覆盖用户保留的包。
 
-新增文档、运行模块或必要资源时，同步构建工具的 FILES 清单；[契约测试](<../tests/test_contract.py>)会检查当前版本候选包的必要运行文件。数据目录、日志、缓存和开发夹具不应入包。
+仓库的测试和工具通过 Git 保留，参与开发请克隆仓库。GitHub 自动源码归档同样按 [.gitattributes](<../.gitattributes>)排除开发资料，不能用它代替开发检出。
+
+新增运行模块、用户文档或必要资源时，同步构建工具的 FILES 清单及归档规则；[契约测试](<../tests/test_contract.py>)会检查当前版本候选包的必要运行文件。数据目录、日志、缓存和开发夹具不应入包。
 
 ## 文档维护
 
-当前文档由[文档目录](<README.md>)导航。使用步骤写在使用指南，默认值和范围写在配置参考，统计定义与保存约束写在架构说明。版本验证与设计记录保留历史语境，不把旧测试计数改成新版本结论。
+当前文档由[文档目录](<README.md>)导航。使用步骤写在使用指南，默认值和范围写在配置参考，统计定义与保存约束写在架构说明。版本验证与设计记录保留在[历史归档](<archive/README.md>)，不把旧测试计数改成新版本结论。
 
 提交文档变更时检查相对链接、命令文件名、配置默认值和截图对应版本。第三方来源见[许可声明](<../THIRD_PARTY_NOTICES.md>)，项目许可见 [AGPL-3.0](<../LICENSE>)。

@@ -1,20 +1,8 @@
-"""越界层：给 provider 打补丁，捕获所有模型调用。
+"""包装 provider 类方法，采集经过这些方法的调用并支持卸载还原。
 
-**这是整个方案里唯一越界的地方。** 依据与取舍见
-../../docs/usage-attribution.md 第 2、3、6 节。
-
-两个必须做对的地方，都是读源码才发现的：
-
-1. **补丁打在类上，不是实例上。**
-   `provider/manager.py:812` 每次 `load_provider` 都会 `self.inst_map[id] = inst` 造新实例，
-   `:823 reload()` 还会遍历替换。实例级补丁在用户改一次模型之后就失效了。
-
-2. **要打的是每个具体子类，不是基类。**
-   `provider.py:100` 的 `Provider.text_chat` 方法体只有一句 `...`（抽象桩），
-   真正干活的是 `sources/openai_source.py` 这类子类里覆写的版本——**子类会遮蔽基类**。
-   只补基类 = 一个调用都记不到。
-
-本模块不 import AstrBot：目标类由 main.py 查好传进来，这里只做「打/还原」。
+包装安装在类上，避免 provider 实例更换后失效；子类覆写会遮蔽基类方法，
+因此需遍历各类自己定义的实现。目标类由 main.py 传入，本模块不依赖 AstrBot。
+采集范围与约束见 docs/ARCHITECTURE.md。
 """
 
 from __future__ import annotations
@@ -34,8 +22,7 @@ MARK = "__usage_stats_patched__"
 def collect_targets(base: type, names: tuple[str, ...] = ("text_chat", "text_chat_stream")) -> list[tuple[type, str]]:
     """找出所有需要打补丁的 (类, 方法名)。
 
-    递归遍历子类，只收「方法定义在**该类自己的 __dict__** 里」的那些——
-    继承来的不用重复打。这样既覆盖了覆写基类的具体实现，也不会漏掉真正实现基类方法的类。
+    遍历基类及其子类，只收各类 __dict__ 中自己定义的方法，避免重复包装继承的方法。
 
     Args:
         base: 基类，例如 astrbot.core.provider.provider.Provider
@@ -83,7 +70,7 @@ class PatchRegistry:
         for cls, name in targets:
             current = cls.__dict__.get(name)
             if current is None or getattr(current, MARK, False):
-                # 已经打过就别叠——热重载时最容易出这个
+                # 已带标记的方法不重复包装，保持安装幂等
                 continue
             wrapper = make_wrapper(current, name)
             setattr(wrapper, MARK, True)
@@ -98,8 +85,8 @@ class PatchRegistry:
     def restore(self) -> list[str]:
         """精确还原。
 
-        只在「当前值仍然是自己打的那个」时才写回，避免踩掉别人后打的补丁；
-        **绝不用 delattr**——那会连基类继承来的方法一起删掉。
+        仅还原仍带本插件标记的方法，避免覆盖未带标记的后续替换。
+        写回保存的函数，不用 delattr，避免删除类属性改变方法解析。
         """
         done: list[str] = []
         while self._saved:

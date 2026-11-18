@@ -173,7 +173,7 @@ MUTATIONS = [
      'return api.apiGet("stats", params).catch(function (err) {',
      'return api.apiGet("stat", params).catch(function (err) {',
      CONTRACT, "test_view_calls_the_route_that_is_registered"),
-    ("清单引用不存在的用例", "docs/VERIFY.md",
+    ("清单引用不存在的用例", "docs/archive/VERIFY.md",
      '`test_totals_agree_across_paths`',
      '`test_totals_agree_across_pathes`',
      CONTRACT, "test_verify_doc_cites_real_tests"),
@@ -222,7 +222,7 @@ FILES = [
     "_conf_schema.json",
     "metadata.yaml",
     ".astrbot-plugin/i18n/en-US.json",
-    "docs/VERIFY.md",
+    "docs/archive/VERIFY.md",
     VIEW, "views/usage/index.html", "views/usage/style.css",
 ]
 TESTS = [

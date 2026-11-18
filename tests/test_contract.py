@@ -152,7 +152,7 @@ def test_verify_doc_cites_real_tests():
     1.3 那张表的全部意义就是「这条已由某个用例覆盖」。引用一个不存在的用例名，
     等于把「没验过」说成「验过了」—— 而这份文档正是给上机的人看的。
     """
-    text = (ROOT / "docs" / "VERIFY.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs" / "archive" / "VERIFY.md").read_text(encoding="utf-8")
     cited = set(re.findall(r"`(test_[a-z_]+)`", text))
     assert cited, "VERIFY.md 里没引用任何用例"
     known: set[str] = set()
@@ -164,6 +164,42 @@ def test_verify_doc_cites_real_tests():
     assert not missing, f"VERIFY.md 引用了不存在的用例：{missing}"
 
 
+
+
+def _install_manifest():
+    tree = ast.parse((ROOT / "tools" / "build_package.py").read_text(encoding="utf-8"))
+    return next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "FILES" for target in node.targets))
+
+
+def test_install_manifest_has_runtime_sources_and_no_development_materials():
+    files = _install_manifest()
+    required = {"main.py", "event_store.py", "price_catalog.py", "patch.py", "stats.py", "store.py", "attribute.py", "log_tail.py",
+                "views/usage/index.html", "views/usage/app.js", "views/usage/dashboard.js", "views/usage/style.css", "LICENSE", "THIRD_PARTY_NOTICES.md"}
+    assert required <= set(files)
+    assert len(files) == len(set(files))
+    forbidden = {"requirements-dev.txt", "pytest.ini", "ruff.toml", "docs/DEVELOPMENT.md"}
+    assert not forbidden.intersection(files)
+    assert not any(name.startswith(("tests/", "tools/", "docs/archive/")) for name in files)
+    assert all((ROOT / name).is_file() for name in files)
+
+
+def test_install_manifest_local_document_links_resolve_inside_the_archive():
+    import posixpath
+    from urllib.parse import unquote
+    files = set(_install_manifest())
+    for name in files:
+        if not name.endswith(".md"):
+            continue
+        text = (ROOT / name).read_text(encoding="utf-8")
+        for target in re.findall(r"\]\(<?([^)>]+)>?\)", text):
+            if re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*:", target) or target.startswith("#"):
+                continue
+            destination = unquote(target.split("#", 1)[0])
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), destination))
+            assert resolved in files, f"installation document {name} links to excluded file {resolved}"
+
+
 def main() -> None:
     cases = [
         test_version_is_the_same_in_code_and_metadata,
@@ -173,6 +209,8 @@ def main() -> None:
         test_keep_days_default_is_the_same_everywhere,
         test_view_calls_the_route_that_is_registered,
         test_verify_doc_cites_real_tests,
+        test_install_manifest_has_runtime_sources_and_no_development_materials,
+        test_install_manifest_local_document_links_resolve_inside_the_archive,
     ]
     for case in cases:
         case()

@@ -1,29 +1,14 @@
 name: astrbot_plugin_usage_stats
 display_name: 用量统计
-short_desc: 按插件归因的模型 token 用量统计——看清钱花在谁身上。
+short_desc: 按插件和模型统计文本调用的 Token 用量、耗时与估算费用。
 desc: |
-  AstrBot 自带的用量统计只覆盖主对话那一次调用。装了十几个插件之后，
-  好几个会在背后自己调模型，这些调用记在账单上，却看不出是谁花的。
-
-  本插件在 provider 层装上补丁，把所有模型调用记下来，再按「发起它的插件」
-  归因。用 /usage 看排行，用 WebUI 视图看图表。
-
-  【为什么必须越界】官方钩子 on_llm_request 只覆盖主对话。插件发起的调用走
-  context.llm_generate，它直接调 provider.text_chat，不经过 filter 流水线。
-  不包一层 provider，就永远看不到这一半。
-
-  【越界的自律】只读不改、默认关闭、卸载时严格还原。记账自己的故障一律吞掉，
-  绝不影响对话。
-
-  【归因方式】从调用栈向上找第一个 data.plugins.* 的模块名。找不到就是主对话。
-
-  【数据】默认保存「插件 × 天 × 模型」日汇总；可选择启用结构化调用明细，查看细粒度趋势、性能和请求记录。不保存消息正文或 API 密钥。
-version: 0.3.2
+  按来源插件和模型汇总文本调用、Token 与估算费用，提供趋势、排行和可选明细。
+  采集默认关闭，范围限于当前 AstrBot 进程经宿主文本方法发起的调用。
+  用 /usage 查看汇总，或在 Web 页面管理采集、价格和数据保留。
+  数据保存在宿主插件数据目录，不保存消息正文或 API 密钥；可选文本日志含会话标识。
+version: 1.0.0
 author: Haasui
 repo: https://github.com/Haasui/astrbot_plugin_usage_stats
-# 这个下限不是估的：v4.11.0 的 provider.py 里 provider_config: dict（:30/:33）、
-# async def text_chat（:96）、text_chat_stream -> AsyncGenerator（:128/:139）都在，
-# entities.py 的 TokenUsage 三栏（input_other / input_cached / output）和 v4.29.0 一致。
 astrbot_version: ">=4.11.0"
 pages:
   - name: usage

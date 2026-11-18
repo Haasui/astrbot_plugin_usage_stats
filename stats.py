@@ -1,7 +1,6 @@
-"""纯逻辑：用量记录的累加与聚合。不 import AstrBot，可单独测。
+"""用量数据模型、聚合与文本输出，不依赖 AstrBot。
 
-字段名刻意对齐 AstrBot 的 TokenUsage（input_other / input_cached / output），
-但本模块不依赖它——边界转换在 main.py 里做。
+usage_from 转换宿主用量，保留 input_other / input_cached / output 三列口径。
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ MAIN_AGENT = "main_agent"
 """归因不到插件时的归属：主对话，或内置 star。"""
 
 NO_SESSION = "no_session"
-"""插件发起的调用拿不到会话（见 docs/usage-attribution.md 第 5 节）。"""
+"""未取得会话标识时使用的占位值；归因约束见 docs/ARCHITECTURE.md。"""
 
 
 def optional_sum(left: int | None, right: int | None) -> int | None:
@@ -28,10 +27,9 @@ def optional_sum(left: int | None, right: int | None) -> int | None:
 
 @dataclass(frozen=True)
 class Usage:
-    """一次调用的 token 用量。
+    """一次调用的 Token 用量，按宿主口径区分普通输入、缓存读取与输出。
 
-    缓存命中单独一栏——它和普通输入的价差可能是几十倍，
-    混在一起算出来的钱是错的。这和 AstrBot 的 TokenUsage 是同一种切法。
+    缓存读取单独保留，以支持不同单价及缓存命中率计算。
     """
 
     input_other: int = 0
@@ -44,11 +42,9 @@ class Usage:
     input_cached: int = 0
     output: int = 0
     cache_reported: int = 0
-    """有多少次调用的响应里**真的带了**缓存字段。
+    """明确上报缓存字段或有正缓存计数的调用数。
 
-    和中转站的计价表是两回事：表里没有「缓存命中」这一行的供应商，返回的 usage
-    里通常也没有 cached_tokens。这种记成 0，界面上要显示「—」而不是「0%」——
-    0% 会被读成「命中了 0 次」，而事实是「根本没告诉过我们」。
+    未上报与明确上报 0 需区分，前者不能显示为 0% 命中。
     """
 
     reasoning: int | None = None
@@ -77,10 +73,9 @@ class Usage:
 
 @dataclass(frozen=True)
 class Shape:
-    """一次请求的**构成**，全是字符数，不是 token。
+    """请求各部分的字符长度、项目数量与耗时，不保留正文。
 
-    用来回答「为什么这次是 42K」：system、历史、当前 prompt、工具定义各自多肥。
-    只数长度，不读内容 —— 日志里不许出现正文。
+    长度用于比较请求构成，不能当作 Token 用量。
     """
 
     system: int = 0
@@ -106,8 +101,7 @@ class Call:
     ok: bool = True
     images: int = 0
     method: str = "text_chat"
-    # 会话只收集、不聚合：遍历调用栈本来就要做（为了归因），顺手捞出来的东西几乎免费。
-    # 展示走 debug 日志，不进 /usage——那儿要保持一屏看完。以后想按会话聚合不用重写。
+    # 会话标识用于调试与文本调用日志，不写入日汇总或结构化明细。
     session: str = NO_SESSION
     shape: Shape | None = None
     event_id: str = field(default_factory=lambda: str(uuid4()))
@@ -156,7 +150,7 @@ class Bucket:
 
 
 def fold_by_model(calls: Iterable[Call]) -> dict[str, dict[str, Bucket]]:
-    """plugin -> 模型。回答「谁最贵」和「它在用什么模型」，不分时间。"""
+    """按插件和模型聚合用量，不分时间。"""
     out: dict[str, dict[str, Bucket]] = defaultdict(lambda: defaultdict(Bucket))
     for call in calls:
         out[call.plugin][call.model_key].add(call)
@@ -164,14 +158,9 @@ def fold_by_model(calls: Iterable[Call]) -> dict[str, dict[str, Bucket]]:
 
 
 def tidy_model_key(key: str) -> str:
-    """把 `provider|model` 里重复的模型名去掉，**只给展示用**。
+    """provider id 已以模型名结尾时，去掉展示键中重复的模型名。
 
-    存的键不动 —— 改了键会让旧数据对不上。这里只处理显示：
-
-        openai/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B|deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
-        → openai/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
-
-    provider id 末尾已经带上模型名时，再拼一遍纯属噪音。
+    只用于展示，不修改存储键，以免历史记录无法匹配。
     """
     if "|" not in key:
         return key
@@ -193,10 +182,7 @@ def day_key(epoch: float, tz_offset_hours: int = 8) -> str:
 def fold_by_day_model(
     calls: Iterable[Call], tz_offset_hours: int = 8
 ) -> dict[str, dict[str, dict[str, Bucket]]]:
-    """plugin -> 天 -> 模型。
-
-    落盘用这个形状：时间维度是账单要的，模型维度是「谁在用贵模型」要的。
-    """
+    """按插件、天和模型聚合，供日汇总存储使用。"""
     out: dict[str, dict[str, dict[str, Bucket]]] = defaultdict(
         lambda: defaultdict(lambda: defaultdict(Bucket))
     )
@@ -244,11 +230,9 @@ def total_usage(calls: Iterable[Call]) -> Usage:
 
 
 def cutoff_for_days(days: int, now: float | None = None, tz_offset_hours: int = 8) -> str:
-    """「最近 N 天」的天键下限。**N=1 就是只有今天**，不是「今天加昨天」。
+    """最近 N 天的天键下限，包含今天；N=1 仅今天，N<=0 不设下限。
 
-    这个换算是**一处**。它曾经在 /usage 和 WebUI 视图里各写一份，一份用
-    days * 86400、另一份用 (days - 1) * 86400 —— 于是点「今天」出来两天，
-    而两边的代码各自看都对。留着两份就是给下一次漂移留门。
+    指令和视图共用此换算，避免天数口径漂移。
     """
     if days <= 0:
         return ""
@@ -257,11 +241,7 @@ def cutoff_for_days(days: int, now: float | None = None, tz_offset_hours: int = 
 
 
 def render_call_line(call: Call, tz_offset_hours: int = 8) -> str:
-    """一行一笔调用，键=值。
-
-    grep 找得出「哪次特别肥」，awk 算得出分布；人眼也读得懂。
-    分隔符只用空格，值里不会出现空格（会话名是冒号分隔的）。
-    """
+    """生成单行调用日志，包含时间、来源、用量、请求构成与会话标识。"""
     when = time.strftime(
         "%Y-%m-%d %H:%M:%S", time.gmtime((call.timestamp or 0) + tz_offset_hours * 3600)
     )
@@ -298,7 +278,7 @@ def render_call_line(call: Call, tz_offset_hours: int = 8) -> str:
 
 
 def compact_number(value: int) -> str:
-    """大数字压成 1.2M / 345.6K。命令行里动辄九位数，一半行宽都给它占了。"""
+    """将大数字压缩为 1.2M / 345.6K 等形式，控制指令输出宽度。"""
     number = float(value or 0)
     for unit, size in (("B", 10**9), ("M", 10**6), ("K", 10**3)):
         if abs(number) >= size:
@@ -309,11 +289,9 @@ def compact_number(value: int) -> str:
 def fold_by_model_across(
     view: Mapping[str, Mapping[str, Bucket]],
 ) -> list[tuple[str, Bucket]]:
-    """插件 → 模型 → 格 摊平成「模型 → 合计」，按 token 降序。
+    """跨插件合并相同 provider/模型键的用量，按 Token 总量降序。
 
-    快捷指令要的是「哪些模型花了多少」，不是「哪个插件花了多少」。同一个模型在
-    不同插件下会被合并 —— 这个口径里的占比和命中率才是可比的，因为单位相同。
-    跨**模型**比 token 占比则没有意义：同一个 token 在不同模型上价钱差几十倍。
+    此处按用量排序，不表示费用排序。
     """
     merged: dict[str, Bucket] = {}
     for models in view.values():
@@ -343,10 +321,9 @@ def render_model_table(
     label: str,
     version: str = "",
 ) -> str:
-    """快捷输出：一行一个模型，按 token 降序。
+    """快捷输出：一行一个模型，按 Token 降序。
 
-    只给调用数、token、缓存命中 —— 插件拆分在明细里，运行期计数在状态里。
-    那两样是不同口径（本次运行 vs 落盘历史 + 本次），混在一屏会让人以为数字对不上。
+    用量包含历史与待保存调用；运行期计数另在状态指令展示，避免混淆口径。
     """
     if not rows:
         return f"模型用量{label}：没有记录。"
@@ -420,20 +397,11 @@ def render_plugin_table(
 
 
 def cache_hit_text(usage: Usage, empty: str = "—") -> str:
-    """缓存命中的展示文本。没有输入 token 时给 `empty`，**不写 0%**。
+    """生成指令与兼容 API 共用的缓存命中率文本。
 
-    0% 是「测了，没命中」；—是「这一格没有分母」。同一个状态两种写法，
-    会让人把「没跑过缓存」读成「缓存全 miss」。
-
-    `/usage`、API 的插件级、API 的模型级都走这一个函数 —— 之前它们各写各的，
-    结果同一个格子插件行显示「—」、模型行显示「0%」。
+    缓存未上报或没有输入分母时返回 empty，避免将未知显示为 0%。
     """
-    # 供应商压根没上报缓存字段：显示「—」而不是「0%」。
-    # 0% 会被读成「命中了 0 次」，事实是「没告诉我们」。
-    #
-    # 但只要有命中数，就说明这个字段在 —— 缓存不会凭空出现。这一条比
-    # cache_reported 可靠：后者靠扒 raw_completion，流式响应的那一栏常常是空的，
-    # 于是每次调用都判成「没上报」，整列显示「—」，而右边「缓存」明明有数字。
+    # 正缓存计数本身就是上报证据，即使原始响应缺少缓存字段也应显示。
     if usage.cache_reported <= 0 and usage.input_cached <= 0 and usage.input_other > 0:
         return empty
     total_in = usage.input_other + usage.input_cached

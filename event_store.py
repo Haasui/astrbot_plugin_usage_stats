@@ -2,7 +2,7 @@
 
 Daily Bucket objects retain totals; detail rows replace their own contributions,
 leaving daily legacy history. No sessions, messages, credentials or exception text
-are persisted. Independently implemented; no upstream source code was copied.
+are persisted.
 """
 from __future__ import annotations
 

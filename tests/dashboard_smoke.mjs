@@ -57,3 +57,7 @@ assert.equal(page.rows.length,50); assert.equal(page.rows[0].model,"m50"); asser
 assert.equal(H.pricePage([{model:"ABC",provider:"p"},{model:"other"}],"abc",8,50).rows[0].model,"ABC");
 assert.equal(H.pricePage([],"",1,50).start,0);
 console.log("Dashboard helper smoke: query/timezones, zero/null, price validation, true-scale stacks, safe keys, sorting and non-overlapping donut passed.");
+
+assert.equal(H.compact(286148215), "286.1M"); assert.equal(H.compact(null), "—");
+assert.equal(H.moneyShort(2.848389), "$2.85"); assert.equal(H.money(2.848389), "$2.848389"); assert.notEqual(H.moneyShort(.0000001), "$0");
+assert.equal(H.displayLabel("astrbot_plugin_example", "plugin"), "example"); assert.equal(H.displayLabel("main_agent", "plugin"), "主对话 / 其他"); assert.equal(H.displayLabel("vendor/model", "model"), "vendor/model");

@@ -7,6 +7,19 @@
   }
   function percent(value) { return known(value) ? fmt(value * 100, 1) + "%" : "—"; }
   function money(value) { return known(value) ? "$" + (value > 0 && value < .000001 ? value.toPrecision(2) : fmt(value, 6)) : "—"; }
+  function compact(value) {
+    if (!known(value)) return "—";
+    var scale = Math.abs(value) >= 1e9 ? [1e9, "B"] : Math.abs(value) >= 1e6 ? [1e6, "M"] : Math.abs(value) >= 1e3 ? [1e3, "K"] : null;
+    return scale ? fmt(value / scale[0], 1) + scale[1] : fmt(value, 0);
+  }
+  function moneyShort(value) {
+    return known(value) && value >= .01 ? "$" + value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : money(value);
+  }
+  function displayLabel(value, kind) {
+    var text = String(value === null || value === undefined ? "" : value);
+    if (kind === "plugin") return text === "main_agent" ? "主对话 / 其他" : text.replace(/^astrbot_plugin_/, "");
+    return text;
+  }
   function query(state, view) {
     var q = { view: view || "dashboard", days: [1, 7, 30, 0].indexOf(state.days) >= 0 ? state.days : 30,
       plugin: state.plugin || "", model: state.model || "", provider: state.provider || "",
@@ -121,5 +134,5 @@
     var pages = Math.max(1, Math.ceil(filtered.length / size)); page = Math.max(1, Math.min(pages, Math.floor(page || 1)));
     return { rows: filtered.slice((page - 1) * size, page * size), page: page, pages: pages, total: filtered.length, start: filtered.length ? (page - 1) * size + 1 : 0, end: Math.min(page * size, filtered.length) };
   }
-  root.UsageDashboard = { known: known, fmt: fmt, percent: percent, money: money, query: query, stacks: stacks, sorted: sorted, price: price, components: components, manualPrice: manualPrice, quote: quote, pricing: pricing, pricePage: pricePage };
+  root.UsageDashboard = { compact: compact, moneyShort: moneyShort, displayLabel: displayLabel, known: known, fmt: fmt, percent: percent, money: money, query: query, stacks: stacks, sorted: sorted, price: price, components: components, manualPrice: manualPrice, quote: quote, pricing: pricing, pricePage: pricePage };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -1,27 +1,7 @@
-"""落盘层：天 × 模型计数的序列化、合并与滚动清理。
+"""JSON 日汇总的序列化、合并与滚动清理，不依赖 AstrBot。
 
-**纯标准库，不 import AstrBot**（只 import 同层的 stats）。除 `load` / `save` 外都是纯函数。
-
-落盘内容只有计数：没有消息正文、没有提示词、没有会话内容。
-
-形状（插件 → 天 → 模型 → 计数）：:
-
-    {
-      "version": 1,
-      "saved_at": 1760630400,
-      "buckets": {
-        "astrbot_plugin_image_gate": {
-          "2026-10-16": {
-            "openai|GLM-5.3-Flash": {"calls": 7, "failed": 0, "images": 2,
-                                     "input_other": 300, "input_cached": 900,
-                                     "output": 40, "total": 1240}
-          }
-        }
-      }
-    }
-
-为什么是「天 × 模型」：账单要时间维度，而「谁在用贵模型」要模型维度。
-天而不是小时 —— 账单按天算，而且键少一个数量级。
+计数按插件、天和 provider/模型键分组，与版本、保存时间和明细提交证明一起存储。
+不保存消息正文、提示词或会话标识。提交约束见 docs/ARCHITECTURE.md。
 """
 
 from __future__ import annotations
@@ -37,11 +17,7 @@ from typing import Any, Mapping
 from .stats import Bucket, Usage, day_key, optional_sum, tidy_model_key
 
 FORMAT_VERSION = 1
-"""落盘格式版本。
-
-比它新的版本当空（那边可能换了布局，硬解析会读出错的数）；比它旧的照收——
-这个形状历来只做过加法，`as_buckets` 对缺字段一律当 0，升级插件不该清掉历史。
-"""
+"""支持的日汇总格式版本。拒绝更高版本，接受旧版本并为缺失计数提供兼容值。"""
 
 KEEP_DAYS = 60
 """保留多少天。更旧的在保存时丢掉。"""
@@ -72,10 +48,9 @@ def snapshot(rolled: Mapping[str, Mapping[str, Mapping[str, Any]]]) -> dict:
 
 
 def merge(base: dict, extra: dict) -> dict:
-    """两个 snapshot 相加。
+    """合并两个 snapshot，要求两侧调用互不重叠。
 
-    可以直接相加，是因为两侧覆盖的调用不相交：base 来自上次运行落盘的数据，
-    extra 来自本次运行内存里的全部记录。**同一天也安全** —— 记的是不同的调用。
+    base 是最近一次成功保存的基线，extra 是待保存调用；同一天的不同调用可以相加。
     """
     out: dict = {
         p: {d: {m: dict(b) for m, b in models.items()} for d, models in days.items()}
@@ -110,9 +85,9 @@ def prune(
     keep_days: int = KEEP_DAYS,
     tz_offset_hours: int = 8,
 ) -> dict:
-    """丢掉旧的天，并清掉已经空掉的插件和模型。
+    """删除过期日汇总，并移除没有保留日期的插件；keep_days<=0 不按天数裁剪。
 
-    天键是 `YYYY-MM-DD`，定长且高位在前 —— **字符串比较就是时间顺序**，不必解析时间。
+    YYYY-MM-DD 天键的字符串顺序与日期顺序一致。
     """
     cutoff = day_key(now - keep_days * 86400, tz_offset_hours) if keep_days > 0 else ""
     out: dict = {}
@@ -128,7 +103,7 @@ def prune(
 
 
 def as_buckets(buckets: dict) -> dict[str, dict[str, dict[str, Bucket]]]:
-    """落盘 dict → 内存 `Bucket`，形状不变。字段缺失一律当 0，不抛。"""
+    """将落盘字典转换为同形状的 Bucket；缺失常规计数按 0，可选计数保持未知。"""
     out: dict[str, dict[str, dict[str, Bucket]]] = defaultdict(
         lambda: defaultdict(dict)
     )
@@ -142,8 +117,7 @@ def as_buckets(buckets: dict) -> dict[str, dict[str, dict[str, Bucket]]]:
                 continue
             for model, cell in models.items():
                 if isinstance(cell, Bucket):
-                    # 已经是内存对象（上游少了一层 snapshot 之类）。原样收下：
-                    # 直接 continue 会让整张表**静默变 0**，而且不报错，很难查。
+                    # 接受已经转换的内存对象，避免重复转换时丢失记录。
                     out[plugin][day][model] = cell
                     continue
                 if not isinstance(cell, dict):
@@ -280,10 +254,9 @@ def series_for(
     cutoff: str = "",
     until: str = "",
 ) -> list[dict]:
-    """取某一个插件（可选再限定某一个模型）的按天序列。
+    """取指定插件及可选模型的按天序列，供下钻时按需查询。
 
-    window_view 的 by_plugin 只到插件一级，模型级没有 —— 而把模型级也常驻在响应里，
-    等于让每 30 秒一次的轮询都多背一份全量数据。所以只在真有人下钻时才走这条路。
+    常规响应只保留插件级序列，避免每次轮询携带全量模型序列。
     """
     days: dict[str, dict[str, int]] = {}
     for day, models in (nested.get(plugin) or {}).items():
@@ -292,9 +265,7 @@ def series_for(
         if until and day >= until:
             continue
         for name, bucket in models.items():
-            # 前端带回来的是**展示名**（api_stats 里过了 tidy_model_key），
-            # 而这里的键是原始的 `provider|model`。两个都得认 ——
-            # 只认原始键的话，界面上点「趋势」会永远得到空图。
+            # 兼容原始 provider|model 键和 tidy_model_key 生成的展示名。
             if model and name != model and tidy_model_key(name) != model:
                 continue
             cell = days.setdefault(day, {"day": day, "calls": 0, "total": 0})
@@ -304,11 +275,7 @@ def series_for(
 
 
 def load(path: str | Path) -> dict:
-    """读回数据。文件不存在 / 损坏 / 版本比本插件新，一律给空 dict。
-
-    版本比本插件**旧**的照收。对照实现（token_sql 的 storage.py）也是这么做的：
-    它把旧版本放进 `LEGACY_SCHEMA_VERSIONS` 一起接受，只拒不认识的。
-    """
+    """读取日汇总，接受旧版本；文件不可读、损坏或格式版本更高时返回空字典。"""
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -333,12 +300,9 @@ def load_checkpoint(path: str | Path) -> str:
 
 
 def save(path: str | Path, buckets: dict, event_checkpoint: str = "") -> bool:
-    """写盘。先写同目录下的唯一临时文件，再原子替换。
+    """写入同目录唯一临时文件后原子替换，避免共享临时文件名造成写入冲突。
 
-    临时文件用唯一名而不是固定的 `.tmp`：同一个数据目录上万一有两个写入方，
-    固定名字会互相覆盖，替换时可能把半截内容搬过去。
-
-    失败一律给 False，不往上抛 —— 调用方在记账路径上。
+    I/O 或序列化失败返回 False，不向记账调用方抛出。
     """
     target = Path(path)
     payload = {

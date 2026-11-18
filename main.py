@@ -1,20 +1,7 @@
-"""模型用量统计 · 入口与装配层（P0）。
+"""模型用量统计的生命周期、记账、指令与 Web 接口。
 
-分层：
-
-    attribute.py  归因层   从调用栈模块名挑出插件名        纯逻辑，不依赖 AstrBot
-    stats.py      统计层   用量累加、小时桶、排行榜        纯逻辑，不依赖 AstrBot
-    patch.py      越界层   类级补丁与精确还原              不依赖 AstrBot（目标类由本文件查好传入）
-    main.py       装配层   装补丁 / 记账 / 指令 / Web API  依赖 AstrBot
-
-**这个插件是全项目里唯一越界的。** 原因见 ../../docs/usage-attribution.md 第 2 节：
-官方钩子 on_llm_request 看不到 context.llm_generate 发起的调用，它直调 provider.text_chat。
-
-越界的三条自律：
-
-1. **只读不改**——不修改请求、不修改响应、不参与决策。记账抛异常一律吞掉。
-2. **默认关闭**——`enabled` 为 false 时不装任何补丁。
-3. **严格还原**——terminate() 里逐个把原方法写回，绝不 delattr。
+采集默认关闭；包装器不修改请求或响应，记账错误不向模型调用方抛出。
+卸载时通过注册表写回原方法。类级包装与归因的约束见 docs/ARCHITECTURE.md。
 """
 
 from __future__ import annotations
@@ -58,29 +45,25 @@ from .stats import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_usage_stats"
-VERSION = "0.3.2"
+VERSION = "1.0.0"
 
 STACK_DEPTH_CAP = 40
 MAX_CALL_LOG_TAIL_LINES = 5000
 MAX_CALL_LOG_READ_BYTES = 8 * 1024 * 1024
-"""调用栈向上走的最大层数。够覆盖 llm_generate -> 插件 这条链，又不至于慢。"""
+"""调用栈扫描有层数上限，避免逐调用遍历过深。"""
 
-# 重入深度：provider 子类若 super().text_chat(...) 调回基类，
-# 基类也被打了补丁，就会记两次。深度 > 0 时不再记账。
+# 记账回调执行期间抑制重入，避免重复记录。
 _DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
     f"{PLUGIN_NAME}_depth", default=0
 )
 
 
 def _scan_call_stack(cap: int = STACK_DEPTH_CAP) -> tuple[list[str], list[Any]]:
-    """一次遍历同时取回两样东西：模块名（归因）和局部变量（找会话）。
-
-    分两次遍历纯属浪费——这个方法在每一次模型调用上都会跑。
-    用 sys._getframe 手工走，比 inspect.stack() 快一个量级。
+    """一次遍历取回归因所需的模块名和会话查找所需的局部变量。
 
     Returns:
-        (模块名, 各层局部变量)，均由内向外。局部变量**不复制**——
-        直接交引用，session_from_locals 只读一遍就丢掉。
+        (模块名, 各层局部变量)，均由内向外。局部变量不复制，
+        交给 session_from_locals 只读使用。
     """
     modules: list[str] = []
     locals_seq: list[Any] = []
@@ -108,8 +91,7 @@ class UsageStatsPlugin(Star):
         self.config: dict[str, Any] = copy.deepcopy(dict(config or {}))
         self._registry = PatchRegistry()
         self._calls: list[Call] = []
-        # 本次运行记了多少次。和 _calls 分开：_calls 在每次保存后会被清空
-        # （内容已经并进基线），这个数只增不清，用来在状态里回答「这一轮跑了多少」。
+        # 保存会清空 _calls；运行期计数独立保留，不随保存清零。
         self._run_calls = 0
         # 调用日志：攒在内存里，跟着重扫的节拍写出去。默认关。
         self._call_log: list[str] = []
@@ -120,8 +102,8 @@ class UsageStatsPlugin(Star):
         self._record_failures = 0
         self._save_failures = 0
         self._unsaved = 0
-        # 上一次运行落盘的数据。**只读基线** —— 保存时永远是「基线 + 本次内存全量」，
-        # 所以重复保存不会翻倍（见 tests/test_store.py 的幂等用例）。
+        # 最近一次成功保存的基线，与尚未保存的 _calls 不重叠。
+        # 保存成功后更新基线并清空 _calls，保持重复保存幂等。
         self._baseline: dict = {}
         self._data_file: Any = None
         self._refresh_task: asyncio.Task | None = None
@@ -166,10 +148,7 @@ class UsageStatsPlugin(Star):
             f"[{PLUGIN_NAME}] 已加载 {VERSION} | 装了 {len(done)} 处补丁："
             + (", ".join(done) or "（一个都没装上，检查 provider 结构）")
         )
-        # 定时重扫：插件初始化时，provider 子类很可能还没被导入，
-        # 那时 Provider.__subclasses__() 是空的，一个都挂不上。
-        # 而"挂不上"会导致一个调用都记不到，也就没有任何事件能触发重扫 ——
-        # 所以这一步必须是时间驱动，不能挂在记账路径上。
+        # provider 子类可能在初始化后才导入；定时重扫不依赖先收到调用。
         self._refresh_task = asyncio.create_task(self._refresh_loop())
 
     async def terminate(self) -> None:
@@ -194,7 +173,7 @@ class UsageStatsPlugin(Star):
     # ------------------------------------------------------------ 记账
 
     def _append_call_log(self, call: Call) -> None:
-        """攒一行调用日志。**不在这里写盘** —— 记账跑在 provider 的调用路径里。"""
+        """缓冲调用日志；此处在 provider 调用路径上，不直接写盘。"""
         if not self._cfg("call_log", False):
             return
         try:
@@ -202,7 +181,7 @@ class UsageStatsPlugin(Star):
             cap = int(self._cfg("call_log_lines", 20000) or 0)
             if cap > 0 and len(self._call_log) > cap:
                 del self._call_log[: len(self._call_log) - cap]
-        except Exception:  # noqa: BLE001 —— 日志写坏了也不能影响记账
+        except Exception:  # noqa: BLE001；日志错误与记账隔离
             pass
 
     def _flush_call_log(self) -> bool:
@@ -230,7 +209,7 @@ class UsageStatsPlugin(Star):
             return False
 
     def _trim_call_log(self) -> None:
-        """按行数裁。攒到两倍才动手，免得每次追加都重写一遍整个文件。"""
+        """超过两倍保留行数后裁剪，避免每次追加都重写文件。"""
         cap = int(self._cfg("call_log_lines", 20000) or 0)
         if cap <= 0 or self._call_log_path is None:
             return
@@ -256,7 +235,7 @@ class UsageStatsPlugin(Star):
         """一次模型调用的记账。由 patch.py 调用，异常必须自己吞掉。"""
         try:
             if _DEPTH.get() > 0:
-                # 子类 super() 调回基类时我们会被进两次，第二次不算
+                # 记账回调重入时跳过
                 self._skipped_reentrant += 1
                 return
             token = _DEPTH.set(1)
@@ -286,7 +265,7 @@ class UsageStatsPlugin(Star):
                 shape = measure_request(kwargs, elapsed_ms)
                 plugin_name = plugin_from_modules(modules, ignore=(PLUGIN_NAME,))
                 if self._cfg("debug", False):
-                    # 会话不进 /usage（那儿要保持一屏），这是个观察点
+                    # 会话标识仅用于日志，不进入日汇总
                     logger.info(
                         f"[{PLUGIN_NAME}] {plugin_name} -> {provider_id}|{model} "
                         f"via {method_name} | 会话={session} | 图片={images}"
@@ -329,7 +308,7 @@ class UsageStatsPlugin(Star):
             finally:
                 _DEPTH.reset(token)
         except Exception:  # noqa: BLE001
-            # 记账自己的故障绝不能让对话挂掉，也绝不往上抛
+            # 隔离记账异常，保留 provider 的结果或原异常
             self._record_failures += 1
 
     def _trim(self) -> None:
@@ -340,12 +319,7 @@ class UsageStatsPlugin(Star):
                 self._save_failures = max(1, self._save_failures)
 
     def _hook_providers(self) -> list[str]:
-        """发现并给 provider 打补丁。**可重复调用** —— install 靠 MARK 幂等。
-
-        每次都用 importlib 重新取模块属性，而不是留一份 import 时的引用：
-        万一哪天 AstrBot 改成重新导入模块，类对象就会被换掉，届时这里仍能跟上。
-        （v4.29.0 的 dynamic_import_provider 用的是普通 import，没有 reload，
-        所以目前类对象是稳定的；这一步是给未来上保险。）
+        """从当前 provider 模块发现目标；install 通过 MARK 保持重复安装幂等。
         """
         try:
             module = importlib.import_module("astrbot.core.provider.provider")
@@ -381,7 +355,7 @@ class UsageStatsPlugin(Star):
     # ------------------------------------------------------------ 落盘
 
     def _load_history(self) -> None:
-        """读回上次运行的数据。失败不致命——大不了这次只在内存里统计。"""
+        """读回日汇总；路径初始化失败时退回内存统计。"""
         try:
             from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
@@ -390,8 +364,7 @@ class UsageStatsPlugin(Star):
             self._baseline = store.load(self._data_file)
             self._event_checkpoint = store.load_checkpoint(self._data_file)
             if not self._baseline and self._data_file.exists() and self._data_file.stat().st_size > 0:
-                # 文件在、也有内容，却读不出记录：多半是版本比本插件新，或者坏了。
-                # 不说一声的话，用户只会看到一张空表，不知道历史去哪了。
+                # 非空文件无法读出记录时告警，避免将不兼容或损坏误认为没有历史。
                 logger.warning(
                     f"[{PLUGIN_NAME}] {self._data_file} 有内容但读不出记录"
                     "（版本比本插件新，或文件损坏）—— 本次只在内存里统计"
@@ -407,7 +380,7 @@ class UsageStatsPlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] 读历史失败，本次只在内存里统计：{exc!r}")
 
     def _save(self) -> bool:
-        """把「基线 + 本次内存全量」合并、裁剪后写盘。任何异常都吞掉。"""
+        """合并基线与待保存调用，裁剪后写盘；保存异常不向调用方抛出。"""
         self._flush_event_history()
         if self._data_file is None:
             return False
@@ -425,11 +398,8 @@ class UsageStatsPlugin(Star):
                 self._event_checkpoint = checkpoint
                 if self._events is not None and self._event_persistent:
                     self._covered_event_ids = self._events.covered_ids(checkpoint)
-                # 内存基线也跟着裁。不裁的话，本次会话里还看得到已经开始丢弃的天，
-                # 重启之后它们又消失了 —— 看到的东西应该等于留存下来的东西。
-                # 裁它是安全的：本次会话的调用全在 _calls 里，合并时还会加回来。
-                # 必须清空：merged 里已经含了 _calls 的全部内容，基线也换成了它。
-                # 不清的话，下一次保存会把同一批调用再加一遍 —— 保存 N 次就放大 N 倍。
+                # 成功后将内存基线更新为已保存的裁剪结果，保持展示与留存一致。
+                # 这些调用已并入新基线，必须清空 _calls，避免下次保存重复累加。
                 self._calls.clear()
                 self._baseline = pruned
                 self._unsaved = 0
@@ -454,7 +424,7 @@ class UsageStatsPlugin(Star):
             self._save()
 
     def _open_event_store(self) -> None:
-        """Open optional detail storage without changing provider behavior."""
+        """Open detail storage and recover calls absent from the daily snapshot."""
         try:
             from .event_store import EventStore
 
@@ -797,8 +767,7 @@ class UsageStatsPlugin(Star):
                 logger.warning(f"[{PLUGIN_NAME}] 详细统计查询失败：{exc!r}")
                 return error_response("统计查询失败，请稍后重试", status_code=503)
 
-        # 调用日志：先把内存里没落盘的那几行刷出去，再从文件读尾巴。
-        # 不刷的话最常见的现象是「开了、聊了几句，面板还是空的」——那几行还在内存里。
+        # 日志尾部查询会先刷新缓冲，使刚记录的调用可见。
         invalid_tail, tail = parse_tail_request(
             request.query.get("tail", 0), MAX_CALL_LOG_TAIL_LINES
         )
@@ -899,10 +868,7 @@ class UsageStatsPlugin(Star):
         )
 
     def _view_days(self) -> dict:
-        """插件 -> 天 -> 模型 -> Bucket（落盘历史 + 本次内存）。
-
-        按天筛选和画趋势图都要它。这里直接复用 store.merge 的「基线 + 内存全量」口径，
-        免得再写一份合并逻辑、再养一个翻倍的 bug。
+        """插件 -> 天 -> 模型 -> Bucket；复用保存时的基线与待保存调用合并口径。
         """
         merged = store.merge(
             self._baseline, store.snapshot(fold_by_day_model(self._calls))
@@ -949,11 +915,7 @@ class UsageStatsPlugin(Star):
         )
 
     def _help_text(self) -> str:
-        """子命令清单。
-
-        这份清单和 _usage_scope 认的口径必须一致 —— tests/test_command.py 会对着
-        语法树核一遍，漏一个子命令就红。
-        """
+        """子命令清单，与 _usage_scope 保持一致。"""
         return "\n".join([
             f"模型用量统计 {VERSION} · 指令",
             "",
@@ -1000,7 +962,7 @@ class UsageStatsPlugin(Star):
     @filter.command("usage_clear", alias={"用量清空", "usg_clear"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def usage_clear(self, event: AstrMessageEvent):
-        """清空**本次运行**的内存记录。落盘的历史不动。"""
+        """清空尚未保存的调用及对应明细，已保存的日汇总保持不变。"""
         n = len(self._calls)
         event_ids = {call.event_id for call in self._calls}
         if self._events is not None:
@@ -1021,13 +983,9 @@ class UsageStatsPlugin(Star):
         )
 
     def _reset_all(self) -> dict[str, Any]:
-        """清空落盘历史与本次运行记录，返回一份能同时给指令和视图用的结果。
+        """清空日汇总、调用明细和待保存记录，供指令与视图共用。
 
-        为什么需要它：展示的数据是「启动时读进来的基线 + 本次内存」。基线里存的是
-        **当时记下的插件名**，代码改了归因规则也**不会回溯修正它们** —— 改完归因
-        如果不重置，旧的错数据会一直并进结果里，直到被 keep_days 滚动清掉。
-
-        写回空结构而不是删文件：删是不可逆的，写空随时能再来一次。
+        日汇总写回空结构，保留价格和文本日志；返回各存储的实际完成状态。
         """
         old = len(self._baseline)
         calls = len(self._calls)

@@ -1,6 +1,6 @@
 # 用量统计调用日志读取与状态设计
 
-> 调用日志有界尾读的设计记录。现行接口与统计行为见 [使用说明](<../README.md>) 和 [架构说明](<ARCHITECTURE.md>)。
+> 调用日志有界尾读的设计记录。现行接口与统计行为见 [使用说明](<../../README.md>) 和 [架构说明](<../ARCHITECTURE.md>)。
 
 本提案为调用日志增加有界尾读和明确的 UI 状态，避免读取错误与“尚无记录”混为一谈。
 
@@ -10,7 +10,7 @@
 | 负责人 | 插件维护者 |
 | 范围 | 调用日志尾部读取、响应状态、日志面板反馈和隐私提示 |
 | 不包含 | token 聚合口径、provider 补丁机制、历史数据结构和成本估算 |
-| 关联文档 | [架构说明](ARCHITECTURE.md)、[验证清单](VERIFY.md)、[插件 README](../README.md) |
+| 关联文档 | [架构说明](../ARCHITECTURE.md)、[验证清单](VERIFY.md)、[插件 README](../../README.md) |
 
 ---
 
@@ -24,12 +24,12 @@
 
 | 已核实事实 | 代码位置 |
 | --- | --- |
-| GET stats 的 tail 分支先 flush，再对整个 calls.log 执行 read 和 splitlines | [main.py](../main.py) |
-| tail 大于零返回 enabled、path、lines；文件读取 OSError 当前被折叠成空列表 | [main.py](../main.py) |
-| 视图提供 200、1000 和“全部”三个读取选项，全部传 100000 | [index.html](../views/usage/index.html) |
-| 日志标签页按需加载，读取结果按输入 token 数排序，支持导出和手动刷新 | [app.js](../views/usage/app.js) |
-| 调用日志每行保存请求构成长度、用量、耗时、状态及会话标识，不保存消息正文 | [stats.py](../stats.py)、[main.py](../main.py) |
-| 当前视图 smoke test 使用最小 DOM 桩，不是浏览器视觉测试 | [view_smoke.mjs](../tests/view_smoke.mjs) |
+| GET stats 的 tail 分支先 flush，再对整个 calls.log 执行 read 和 splitlines | [main.py](../../main.py) |
+| tail 大于零返回 enabled、path、lines；文件读取 OSError 当前被折叠成空列表 | [main.py](../../main.py) |
+| 视图提供 200、1000 和“全部”三个读取选项，全部传 100000 | [index.html](../../views/usage/index.html) |
+| 日志标签页按需加载，读取结果按输入 token 数排序，支持导出和手动刷新 | [app.js](../../views/usage/app.js) |
+| 调用日志每行保存请求构成长度、用量、耗时、状态及会话标识，不保存消息正文 | [stats.py](../../stats.py)、[main.py](../../main.py) |
+| 当前视图 smoke test 使用最小 DOM 桩，不是浏览器视觉测试 | [view_smoke.mjs](../../tests/view_smoke.mjs) |
 
 以上描述当前实现。以下章节是提议，不代表已发布行为。
 
@@ -167,7 +167,7 @@ error_code 使用稳定的小写标识：path_unavailable、read_failed、flush_
 
 ### 阶段一：尾读 helper 与 API
 
-文件：新建 log_tail.py、修改 [main.py](../main.py)，并新建 tests/test_log_tail.py。log_tail.py 只依赖标准库，以二进制 file-like 对象为输入，负责边界扫描、完整行选择和解码。
+文件：新建 log_tail.py、修改 [main.py](../../main.py)，并新建 tests/test_log_tail.py。log_tail.py 只依赖标准库，以二进制 file-like 对象为输入，负责边界扫描、完整行选择和解码。
 
 验收：
 
@@ -180,7 +180,7 @@ error_code 使用稳定的小写标识：path_unavailable、read_failed、flush_
 
 ### 阶段二：日志状态视图
 
-文件：[index.html](../views/usage/index.html)、[app.js](../views/usage/app.js)、[style.css](../views/usage/style.css)、[view_smoke.mjs](../tests/view_smoke.mjs)。
+文件：[index.html](../../views/usage/index.html)、[app.js](../../views/usage/app.js)、[style.css](../../views/usage/style.css)、[view_smoke.mjs](../../tests/view_smoke.mjs)。
 
 验收：
 
@@ -193,7 +193,7 @@ error_code 使用稳定的小写标识：path_unavailable、read_failed、flush_
 
 ### 阶段三：操作文档
 
-文件：[README.md](../README.md)、[VERIFY.md](VERIFY.md)。
+文件：[README.md](../../README.md)、[VERIFY.md](VERIFY.md)。
 
 验收：记录最大行数和字节数、截断提示、日志包含会话标识、日志禁用与读取失败的区别；真机检查日志配置关闭、空日志、可读日志和无权限读取四种状态。
 

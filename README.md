@@ -37,7 +37,7 @@ AstrBot 文本模型用量统计插件。按来源插件、模型提供方和时
 
 页面顶部的统一筛选用于统计、分析、明细和导出。调用日志是独立的有界尾读，不使用这些统计筛选。
 
-## 先了解这三点
+## 统计范围
 
 - **采集范围**：记录经过当前 AstrBot 进程中 provider 文本生成方法的调用，不是供应商侧的全部 HTTP 请求或重试账单。
 - **数据覆盖**：Token 依赖返回的 usage，性能依赖可用明细。未上报字段与明确的零值不是一回事。
@@ -50,12 +50,12 @@ AstrBot 文本模型用量统计插件。按来源插件、模型提供方和时
 - [使用指南](<docs/USAGE.md>)：启用、筛选、价格、导出与常见问题。
 - [配置参考](<docs/CONFIGURATION.md>)：全部配置项、默认值和修改入口。
 - [架构与统计口径](<docs/ARCHITECTURE.md>)：采集、归因、指标与保存机制。
-- [开发与贡献](<docs/DEVELOPMENT.md>)：本地验证、预览与打包。
+- [开发与贡献](<https://github.com/Haasui/astrbot_plugin_usage_stats/blob/main/docs/DEVELOPMENT.md>)：本地验证、预览与打包。
 - [文档目录](<docs/README.md>)：当前指南及历史设计、验证记录。
 
 ## 参与贡献
 
-提交问题时，请附上 AstrBot 与插件版本、复现步骤和脱敏后的报错。修改前先阅读[开发与贡献](<docs/DEVELOPMENT.md>)；不要上传真实数据文件、会话标识或凭证。
+提交问题时，请附上 AstrBot 与插件版本、复现步骤和脱敏后的报错。修改前先阅读[开发与贡献](<https://github.com/Haasui/astrbot_plugin_usage_stats/blob/main/docs/DEVELOPMENT.md>)；不要上传真实数据文件、会话标识或凭证。
 
 ## 许可与来源
 

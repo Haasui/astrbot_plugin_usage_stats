@@ -4,7 +4,7 @@
 
 当前自动化覆盖统计纯逻辑、SQLite 查询、AstrBot 装配桩与网页 DOM 桩。它不证明真实供应商的 usage、首 Token 时间或账单准确性，也不替代 AstrBot 实际页面的视觉与权限检查。
 
-源码入口见 [装配层](<../main.py>)、[明细存储与查询](<../event_store.py>)、[采集包装器](<../patch.py>)、[统计模型](<../stats.py>)、[页面](<../views/usage/index.html>)。历史上机记录保存在 [旧验证记录](<VERIFY.md>)。
+源码入口见 [装配层](<../../main.py>)、[明细存储与查询](<../../event_store.py>)、[采集包装器](<../../patch.py>)、[统计模型](<../../stats.py>)、[页面](<../../views/usage/index.html>)。历史上机记录保存在 [旧验证记录](<VERIFY.md>)。
 
 ## 自动化命令
 
@@ -31,13 +31,13 @@ node tests/view_smoke.mjs
 
 | 覆盖 | 检查位置 | 可观察结果 |
 | --- | --- | --- |
-| 缓存标记、三类 Token 与未知字段 | [统计测试](<../tests/test_core.py>) | 缓存上报状态往返保留，思考和写入不重复加总 |
-| 同步、协程、流式失败与取消 | [包装器测试](<../tests/test_patch.py>) | 原异常不变，每次调用仅记一次，super 与独立任务不互相误抑制 |
-| 日桶、取消与合并 | [存储测试](<../tests/test_store.py>)、[取消计数测试](<../tests/test_cancellation_counts.py>) | 计数与三类 Token 跨快照和聚合路径一致 |
-| 过滤、半开时间、分页、价格和导出 | [查询测试](<../tests/test_event_store.py>) | 缺价不当免费；零价合法；导出只含匹配明细并限制 5000 行 |
-| 默认值、鉴权、队列重试与重置 | [装配测试](<../tests/test_integration.py>) | 默认不保存明细；未登录不能访问新接口或保存价格；部分失败不误报完成 |
-| SQLite 已提交、JSON 替换失败后的重启 | [真实文件恢复测试](<../tests/test_recovery_disk.py>) | 旧纯日历史与新明细均保留，重复读取不增加计数 |
-| 筛选竞态、图表、价格草稿与日志状态 | [页面冒烟](<../tests/view_smoke.mjs>)、[图表算法冒烟](<../tests/dashboard_smoke.mjs>) | 旧响应不覆盖新选择，隐藏系列不改变全局 KPI，价格编辑不被刷新覆盖 |
+| 缓存标记、三类 Token 与未知字段 | [统计测试](<../../tests/test_core.py>) | 缓存上报状态往返保留，思考和写入不重复加总 |
+| 同步、协程、流式失败与取消 | [包装器测试](<../../tests/test_patch.py>) | 原异常不变，每次调用仅记一次，super 与独立任务不互相误抑制 |
+| 日桶、取消与合并 | [存储测试](<../../tests/test_store.py>)、[取消计数测试](<../../tests/test_cancellation_counts.py>) | 计数与三类 Token 跨快照和聚合路径一致 |
+| 过滤、半开时间、分页、价格和导出 | [查询测试](<../../tests/test_event_store.py>) | 缺价不当免费；零价合法；导出只含匹配明细并限制 5000 行 |
+| 默认值、鉴权、队列重试与重置 | [装配测试](<../../tests/test_integration.py>) | 默认不保存明细；未登录不能访问新接口或保存价格；部分失败不误报完成 |
+| SQLite 已提交、JSON 替换失败后的重启 | [真实文件恢复测试](<../../tests/test_recovery_disk.py>) | 旧纯日历史与新明细均保留，重复读取不增加计数 |
+| 筛选竞态、图表、价格草稿与日志状态 | [页面冒烟](<../../tests/view_smoke.mjs>)、[图表算法冒烟](<../../tests/dashboard_smoke.mjs>) | 旧响应不覆盖新选择，隐藏系列不改变全局 KPI，价格编辑不被刷新覆盖 |
 
 ## 已执行结果
 
