@@ -2,11 +2,9 @@ name: astrbot_plugin_usage_stats
 display_name: 用量统计
 short_desc: 按插件和模型统计文本调用的 Token 用量、耗时与估算费用。
 desc: |
-  按来源插件和模型汇总文本调用、Token 与估算费用，提供趋势、排行和可选明细。
-  采集默认关闭，范围限于当前 AstrBot 进程经宿主文本方法发起的调用。
-  用 /usage 查看汇总，或在 Web 页面管理采集、价格和数据保留。
-  数据保存在宿主插件数据目录，不保存消息正文或 API 密钥；可选文本日志含会话标识。
-version: 1.0.0
+  按插件和模型统计文本调用、Token 用量与估算费用。
+  默认不采集，在「用量统计」页面开启；也可用 /usage 查用量。
+version: 1.0.1
 author: Haasui
 repo: https://github.com/Haasui/astrbot_plugin_usage_stats
 astrbot_version: ">=4.11.0"

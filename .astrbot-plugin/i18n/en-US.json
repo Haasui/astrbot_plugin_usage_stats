@@ -2,7 +2,7 @@
   "metadata": {
     "display_name": "Usage Stats",
     "short_desc": "Track text-call token usage, timing and estimated costs by plugin and model.",
-    "desc": "Summarizes text-model calls, token usage and estimated cost by source plugin and model, with trends, rankings and optional call details. Collection is off by default and covers calls made through AstrBot text-provider methods in the current process. Use /usage for summaries or the Web page to manage collection, prices and retention. Data stays in the host plugin-data directory; no message bodies or API keys are stored. Optional text logs include session identifiers."
+    "desc": "View text-model calls, token usage, and estimated costs by plugin and model. Collection is off by default. Turn it on from the Usage Stats page. Use /usage to view a summary."
   },
   "config": {
     "enabled": {

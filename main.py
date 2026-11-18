@@ -45,7 +45,7 @@ from .stats import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_usage_stats"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 STACK_DEPTH_CAP = 40
 MAX_CALL_LOG_TAIL_LINES = 5000
@@ -884,12 +884,7 @@ class UsageStatsPlugin(Star):
     @filter.command("usage", alias={"用量", "usg"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def usage_status(self, event: AstrMessageEvent, arg: str = ""):
-        """按模型看用量。子命令：full / day / week / status。
-
-        默认一行一个模型（调用数、token、缓存命中）。插件拆分在 full 里，运行期
-        计数在 status 里 —— 它们是**不同口径**（本次运行 vs 落盘历史 + 本次），
-        混在一屏会让人以为数字对不上。
-        """
+        """按模型查看用量；用 /usage help 查看全部子命令。"""
 
         if not self._cfg("enabled", False):
             yield event.plain_result(
@@ -962,7 +957,7 @@ class UsageStatsPlugin(Star):
     @filter.command("usage_clear", alias={"用量清空", "usg_clear"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def usage_clear(self, event: AstrMessageEvent):
-        """清空尚未保存的调用及对应明细，已保存的日汇总保持不变。"""
+        """清空未保存的调用及其明细，保留已保存的日汇总。"""
         n = len(self._calls)
         event_ids = {call.event_id for call in self._calls}
         if self._events is not None:
@@ -1026,7 +1021,7 @@ class UsageStatsPlugin(Star):
     @filter.command("usage_reset", alias={"用量重置", "usg_reset"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def usage_reset(self, event: AstrMessageEvent):
-        """清空**落盘的历史**（连同本次运行的记录）。"""
+        """清空全部用量统计与调用明细，保留采集设置、价格和文本日志。"""
         result = self._reset_all()
         status = "日汇总与明细重置完成" if result["saved"] else "重置未全部持久化"
         yield event.plain_result(f"模型用量统计：{status}。\n{result['note']}")

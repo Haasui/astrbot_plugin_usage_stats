@@ -2,6 +2,11 @@
 
 近期用户相关变更。较早版本与完整开发记录见[历史归档](<https://github.com/Haasui/astrbot_plugin_usage_stats/blob/main/docs/archive/CHANGELOG-development.md>)。
 
+## [v1.0.1] - 2026-11-18
+
+- 精简 AstrBot 插件详情页的中英文简介，说明采集默认关闭及开启入口。
+- 将 `/usage`、`/usage_clear` 和 `/usage_reset` 的说明改为简短的纯文本，并注明清理后保留的数据。指令行为与存储格式未变。
+
 ## [v1.0.0] - 未发布
 
 - 采用六页紧凑工作台：总览以趋势图为主，窄屏优先显示关键数据，指标口径和操作说明可按需展开。
